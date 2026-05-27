@@ -1,0 +1,2566 @@
+---
+title: "sdmTMB function - Retrospective analysis"
+author: "Kaitlyn O'Brien"
+date: "2024-12-19"
+output: word_document
+---
+
+#Purpose of this document
+
+This document stores all the functions that are used in the retrospective analysis. These functions include fitting the models, density analysis, and plotting methods. 
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, dpi = 300, message = FALSE, cache.lazy = F)
+```
+
+```{r load packages, results = 'hide', message = FALSE}
+library("ggplot2")
+library("raster")
+library("terra")
+library("tidyverse")
+library("RANN")
+library("sf")
+library("rnaturalearth")
+library("devtools")
+library("sdmTMB")
+library("ggpubr")
+library("patchwork")
+library("ggh4x")
+library("gridExtra")
+library("dplyr")
+library("sdmTMB")
+library("nwfscSurvey")
+library("eply")
+library("patchwork")
+library("sdmTMBextra")
+library("units")
+library("RANN")
+library("scales")
+library("ggh4x")
+library("pbapply")
+library("cowplot")
+library("officedown")
+
+WD.1=("C:/Users/kaitlyn.o'brien/Documents/GitHub/Offshore_Wind_PJ1/Data")
+```
+
+# Functions 
+
+## Internal functions 
+
+These functions are called upon in the overarching function. The first function was designed to get index values based on sdmTMB models depending on the spatial scale examined. The second function is utilized to gather density estimates across an even spatial scale for plotting purposes. 
+
+```{r Functions for analysis}
+
+Pred_sdm_function = function(Pred_data = NA, model = NA, Mod_data = NA){
+      ## Prediction ####
+    Proj_df_years = replicate_df(Pred_data[,c("area_km2","lon","lat","depth_m", "group")], "year",
+                                 unique(Mod_data$year)) #Repeat the prediction data frame for the years that were analyzed 
+    predictions_All_TMB <- predict(model, newdata = Proj_df_years, return_tmb_object=T)
+
+        index <- get_index(predictions_All_TMB, 
+                           area = predictions_All_TMB$data$area_km2, 
+                           bias_correct = TRUE)
+        index = rbind(index, data.frame(year = 2020,
+                                        est = NA,
+                                        lwr = NA, 
+                                        upr = NA, 
+                                        log_est = NA,
+                                        se = NA))
+        index$group = Pred_data[1,]$group
+        ggplot(index, aes(as.numeric(as.character(year)), est)) + 
+          geom_line() +
+          geom_ribbon(aes(ymin = lwr, ymax = upr), alpha = 0.4) +
+          xlab('Year') + ylab('Biomass estimate (kg)')
+        return(list(Index = index,
+               Pred = predictions_All_TMB$data))
+    }
+
+saveRDS(Pred_sdm_function, paste0(WD.1, "/Functions/Pred_sdm_function.rds"))
+
+
+Dens_PM_func = function(Dens_data = NA,
+                        scen = NA,
+                        Proj_extent = NA,
+                        OSW_shp = NA){
+  # List to be filled 
+    SP_dens = Dens_data
+    SP_dens_ER = Dens_data %>%
+      filter(group %in% "Entire region")
+    
+    group_dif_ER = list()
+    gr_group_xy <- list()
+    gr_group = list()
+    gr_pred_group = list()
+    group_dif = list()
+    group_list = list()
+    
+    #Grab points for plotting - entire region 
+    gr=st_bbox(SP_dens[SP_dens$scen=="All data",] %>%
+                 st_as_sf(coords = c("lon", "lat"),
+                          crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+      st_make_grid(cellsize=.5, what='centers')%>%
+      st_as_sf() %>%
+      st_intersection(st_as_sfc((Proj_extent)))
+    gr_xy <- st_coordinates(gr)
+
+    #Grab points for plotting - OSW areas 
+    for(i in 1:length(unique(OSW_shp$group))){ 
+    #Create a data frame for each OSW area
+      gr_group[[i]]=gr %>%
+        st_intersection(st_as_sfc(OSW_shp[OSW_shp$group==unique(OSW_shp$group)[i],]))
+      gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+    }
+    names(gr_group) = unique(OSW_shp$group)
+    names(gr_group_xy) = unique(OSW_shp$group)
+
+    
+
+    for(i in 1:length(unique(scen$Scenario))){
+          ### Part 1 - set up the data frame ####
+          #Create dataframe of density where things are properly labeled and estimate is Exp
+      df1 = SP_dens_ER %>%
+        mutate(Exp = exp(est)) %>%
+        rename(X = lon, Y= lat) %>%
+        dplyr::select(X, Y, scen, Exp, year) %>%
+        rename(Scenario = scen)
+      #Create two data frames for the two different scenarios of concern 
+      df_scen =df1 %>%
+        filter(Scenario == unique(scen$Scenario)[i]) %>%
+        select(X,Y,Exp,year)
+      colnames(df_scen) = c("X", "Y", unique(scen$Scenario)[i], "year")
+      df_all_data = df1 %>%
+        filter(Scenario == "All data") %>%
+        select(X,Y,Exp,year) %>%
+        rename("All data" = Exp)   
+      #Merge the two dataframes together 
+      DF_dif = merge(df_all_data, df_scen, by = c("X", "Y", "year"))
+      group_dif_ER[[i]] = DF_dif %>% 
+        mutate(Dif = .[[5]]-.[[4]],
+               scen = unique(scen$Scenario)[i]) 
+      colnames(group_dif_ER[[i]]) = c("X","Y","year", "All data", "Est", "Dif", "scen")
+    }
+    
+    sp_Dif = bind_rows(group_dif_ER) #Want to save this as it has the estimates and the dif for each scneario option 
+    
+    #Now calculate the density performance metrics 
+    sp_PM = sp_Dif %>%
+      mutate(ID = paste0(X,"_",Y)) %>%
+      group_by(ID, scen) %>%
+      summarise(RMSE = sqrt((sum((Dif)^2))/length(unique(sp_Dif$year))),
+                MAE = abs(sum(Dif))/length(unique(sp_Dif$year))) %>%
+      separate(ID, into = c("X", "Y"), sep = "\\_")%>%
+      mutate(X = as.numeric(as.character(X)),
+             Y = as.numeric(as.character(Y)))
+    
+    gr_pred_PM = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      pred_points <- x %>%
+      dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points,gr_xy[,c("X", "Y")],k=1)$nn.idx
+      gr_pred <- gr_xy %>% as_tibble() %>% mutate(RMSE=x$RMSE[nns],
+                                                  MAE = x$MAE[nns])
+      gr_pred$scen = x$scen[1]
+      return(gr_pred)
+      }))
+
+    gr_pred_PM_OSW = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      scen_list = list()
+      for(i in 1:length(gr_group_xy)){
+        pred_points <- x %>%
+          dplyr::select(X,Y) %>% as.matrix()
+        nns <- nn2(pred_points,gr_group_xy[[i]][,c("X","Y")],k=1)$nn.idx
+        gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(RMSE=x$RMSE[nns],
+                                                               MAE = x$MAE[nns])
+        gr_pred$scen = x$scen[1]
+        gr_pred$OSW = names(gr_group_xy)[i]
+        scen_list[[i]] = gr_pred
+        }
+      return(bind_rows(scen_list))
+      }))
+    return(list(Density_PM_ER = gr_pred_PM,
+                Density_PM_OSW = gr_pred_PM_OSW,
+                Density_PM_all = sp_PM,
+                Density_Dif = sp_Dif))
+}
+saveRDS(Dens_PM_func, paste0(WD.1, "/Functions/Dens_PM_func.rds"))
+
+
+Dens_PM_func_DG = function(Dens_data = NA,
+                        scen = NA,
+                        Proj_extent = NA,
+                        OSW_shp = NA){
+  Dens_data$Est = plogis(Dens_data$est1)*exp(Dens_data$est2)
+  # List to be filled 
+    SP_dens = Dens_data
+    SP_dens_ER = Dens_data %>%
+      filter(group %in% "Entire region")
+    
+    
+    
+    group_dif_ER = list()
+    gr_group_xy <- list()
+    gr_group = list()
+    gr_pred_group = list()
+    group_dif = list()
+    group_list = list()
+    
+    #Grab points for plotting - entire region 
+    gr=st_bbox(SP_dens[SP_dens$scen=="All data",] %>%
+                 st_as_sf(coords = c("lon", "lat"),
+                          crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+      st_make_grid(cellsize=.5, what='centers')%>%
+      st_as_sf() %>%
+      st_intersection(st_as_sfc((Proj_extent)))
+    gr_xy <- st_coordinates(gr)
+
+    #Grab points for plotting - OSW areas 
+    for(i in 1:length(unique(OSW_shp$group))){ 
+    #Create a data frame for each OSW area
+      gr_group[[i]]=gr %>%
+        st_intersection(st_as_sfc(OSW_shp[OSW_shp$group==unique(OSW_shp$group)[i],]))
+      gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+    }
+    names(gr_group) = unique(OSW_shp$group)
+    names(gr_group_xy) = unique(OSW_shp$group)
+
+    
+
+    for(i in 1:length(unique(scen$Scenario))){
+          ### Part 1 - set up the data frame ####
+          #Create dataframe of density where things are properly labeled and estimate is Exp
+      df1 = SP_dens_ER %>%
+        mutate(Exp = Est) %>%
+        rename(X = lon, Y= lat) %>%
+        dplyr::select(X, Y, scen, Exp, year) %>%
+        rename(Scenario = scen)
+      #Create two data frames for the two different scenarios of concern 
+      df_scen =df1 %>%
+        filter(Scenario == unique(scen$Scenario)[i]) %>%
+        select(X,Y,Exp,year)
+      colnames(df_scen) = c("X", "Y", unique(scen$Scenario)[i], "year")
+      df_all_data = df1 %>%
+        filter(Scenario == "All data") %>%
+        select(X,Y,Exp,year) %>%
+        rename("All data" = Exp)   
+      #Merge the two dataframes together 
+      DF_dif = merge(df_all_data, df_scen, by = c("X", "Y", "year"))
+      group_dif_ER[[i]] = DF_dif %>% 
+        mutate(Dif = .[[5]]-.[[4]],
+               scen = unique(scen$Scenario)[i]) 
+      colnames(group_dif_ER[[i]]) = c("X","Y","year", "All data", "Est", "Dif", "scen")
+    }
+    
+    sp_Dif = bind_rows(group_dif_ER) #Want to save this as it has the estimates and the dif for each scneario option 
+    
+    #Now calculate the density performance metrics 
+    sp_PM = sp_Dif %>%
+      mutate(ID = paste0(X,"_",Y)) %>%
+      group_by(ID, scen) %>%
+      summarise(RMSE = sqrt((sum((Dif)^2))/length(unique(sp_Dif$year))),
+                MAE = abs(sum(Dif))/length(unique(sp_Dif$year))) %>%
+      separate(ID, into = c("X", "Y"), sep = "\\_")%>%
+      mutate(X = as.numeric(as.character(X)),
+             Y = as.numeric(as.character(Y)))
+    
+    gr_pred_PM = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      pred_points <- x %>%
+      dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points,gr_xy[,c("X", "Y")],k=1)$nn.idx
+      gr_pred <- gr_xy %>% as_tibble() %>% mutate(RMSE=x$RMSE[nns],
+                                                  MAE = x$MAE[nns])
+      gr_pred$scen = x$scen[1]
+      return(gr_pred)
+      }))
+
+    gr_pred_PM_OSW = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      scen_list = list()
+      for(i in 1:length(gr_group_xy)){
+        pred_points <- x %>%
+          dplyr::select(X,Y) %>% as.matrix()
+        nns <- nn2(pred_points,gr_group_xy[[i]][,c("X","Y")],k=1)$nn.idx
+        gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(RMSE=x$RMSE[nns],
+                                                               MAE = x$MAE[nns])
+        gr_pred$scen = x$scen[1]
+        gr_pred$OSW = names(gr_group_xy)[i]
+        scen_list[[i]] = gr_pred
+        }
+      return(bind_rows(scen_list))
+      }))
+    return(list(Density_PM_ER = gr_pred_PM,
+                Density_PM_OSW = gr_pred_PM_OSW,
+                Density_PM_all = sp_PM,
+                Density_Dif = sp_Dif))
+}
+saveRDS(Dens_PM_func_DG, paste0(WD.1, "/Functions/Dens_PM_func_DG.rds"))
+
+```
+
+## Large Projection Function 
+
+```{r ProjectionFunction}
+
+PROJ_Func = function(scen = NA, #Data frame of the different scenarios of interest - column 1 is the scenario, column 2 is the terminal year where sampling occurred in the OSW area 
+                     prediction_data = NA, #Data frame for predictions of the sdmTMB model - no years included at the moment
+                     model_data = NA, #Data for the species for fitting the models (in this case the WCGBTS data)
+                     OSW_shp = NA,#SF file (polygon) for the different areas of interest (ensure that there is a column identifying them - here it is called "group")
+                     S.edge = NA,
+                     M.edge = NA,
+                     Start.year = NA,
+                     Term.year = NA, #The terminal year to assess - only pull out the density for this year 
+                     Proj_extent = NA, #Shapefile or data frame to trim the projection
+                     c.off = NA){ #cutoff for the INLA mesh
+  ################################################################################################
+  #### Gather the prediction data frames - specifically separate the individual areas        ####
+  ################################################################################################
+  
+  #The entire prediction data frame is supplied to the function, but we need to specify the data frames for each area of interest
+  
+  #This for loop goes through and pulls out the prediction data inside each area of interest - in this case the four OSW areas 
+  Proj_df_OSW=list(NA)
+  for(x in 1:length(unique(OSW_shp$group))){
+    groups = unique(OSW_shp$group)
+    OSW_a=OSW_shp%>%
+      filter(group==groups[x])
+    
+    OSW_b=st_intersection(prediction_data %>% 
+                            st_as_sf(coords = c("lon", "lat"),
+                                     crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")), OSW_a)
+    OSW_b$lon = st_coordinates(OSW_b)[,1]
+    OSW_b$lat = st_coordinates(OSW_b)[,2]
+    
+    Proj_df_OSW[[x]] = data.frame(OSW_b)
+    Proj_df_OSW[[x]]$group = unique(OSW_shp$group)[x]#Make sure group is labeled correctly 
+  }  
+  names(Proj_df_OSW) = unique(OSW_shp$group)#Name each element of the list by the OSW area
+  
+  ## Now we also want to evaluate on how indices could change if there was evidence to assess and manage these stocks as a north/south west coast stock
+  Proj_df_OSW$North = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd >=40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "North")
+  
+  Proj_df_OSW$South = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd <40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "South")
+  ################################################################################################
+  #### Fit a model with all the data across all years                                         ####
+  ################################################################################################
+  # sdmTMB is utilized here, for this we need to include a mesh and the model data 
+  print(paste0("Starting prediction for all years and all data for ", model_data$common_name[1]))
+  OG_mesh1 = fmesher::fm_mesh_2d_inla(loc = cbind(model_data$lon, model_data$lat),
+                                      max.edge = c(S.edge,M.edge),offset = c(25, 50),
+                                      cutoff = c.off)
+  OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"), mesh = OG_mesh1)
+  plot(OG_mesh)
+  # OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"),
+  #                     cutoff = c.off,
+  #                     type = "cutoff")#Create the original mesh utilizing all data
+  ## Fit the model - currently only including spatial for test purposes ####
+  #Ideally, fit the original model first and then use it as an input into the function?
+  start = Sys.time()
+  Mod1 = tryCatch({ 
+    sdmTMB(data = model_data,
+           formula = cpue_kg_km2 ~ as.factor(year) + s(depth_m,k=3),#Currently including year and depth as variables to consider
+           mesh = OG_mesh,
+           time = "year",
+           #spatiotemporal = "iid",
+           family = tweedie(link = "log"),#Tweedie distribution for the moment 
+           spatial = "on",#list("on","on"),
+           spatiotemporal = "IID",#list("off","IID"),
+    )}, error = function(e) NA)
+  print(Sys.time()-start)
+  saveRDS(Mod1, paste0(WD.1, "/sdmTMB_func/Model_",model_data$common_name[1],"_",OSW_shp$Scenario[1],Sys.Date(),"_All_Data.rds"))
+  # Model check ####
+  sanity(Mod1)
+  print(tidy(Mod1, conf.int = T))
+  # Residual check ####
+  model_data$resid = residuals(Mod1, type ='mle-mvn')
+  #model_data$resid2 = residuals(Mod1, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_mod1 <- simulate(Mod1, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_mod1 == 0)/length(s_mod1); nrow(model_data[model_data$cpue_kg_km2==0,])/nrow(model_data)#Check that it can handle the # of zeros
+  r_mod1 = dharma_residuals(s_mod1, Mod1, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_DHARMa_Residuals_plots.pdf"))
+  plot(r_mod1)
+  DHARMa::testResiduals(r_mod1)
+  DHARMa::testZeroInflation(r_mod1)
+  dev.off()
+  # qqplot1=ggplot(model_data, aes(sample = resid)) + stat_qq() + stat_qq_line()+
+  #   theme_classic()+
+  #   labs(title = paste0(model_data$common_name[1], ": All data"))
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_qqplot.png"),
+  #        qqplot1,
+  #        height = 4, width = 4, units = "in")
+  #MCMC-based residuals - much slower to run 
+  # set.seed(123)
+  # samps <- sdmTMBextra::predict_mle_mcmc(Mod1, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+  # r <- residuals(Mod1, "mle-mcmc", mcmc_samples = samps)
+  # qqnorm(r)
+  # abline(a = 0, b = 1)
+  
+  # Spatial check ####
+  Mod1_spatial=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial.png"),
+         Mod1_spatial,
+         height = 10, width = 10, units = "in")
+  
+  #   Mod1_spatialb=ggplot() +
+  #   scale_colour_gradient2() +
+  #   geom_point(data = model_data, aes(lon, lat, col = resid2),size=.1) +
+  #   facet_wrap(~year) +
+  #   coord_fixed()+
+  #   theme_classic()+
+  #   theme(legend.title = element_blank())
+  # 
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_spatial_Gamma.png"),
+  #        Mod1_spatialb,
+  #        height = 10, width = 10, units = "in")
+  
+  ############################
+  ### Predictions         ####
+  ############################
+  
+  #Entire region
+  Entire_region_all_y = Pred_sdm_function(Pred_data = prediction_data,
+                                          model = Mod1,
+                                          Mod_data = model_data)
+  #OSW areas - separately
+  OSW_all_y=list(NA)
+  for(j in 1:length(Proj_df_OSW)){
+    Pred_data1 = Proj_df_OSW[[j]]
+    #Pred_data1$group == unique(OSW_shp$group)[j]
+    OSW_all_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  }
+  # OSW areas - all together
+  Proj_df_OSW_all = bind_rows(Proj_df_OSW[unique(OSW_shp$group)])
+  Proj_df_OSW_all$group = "OSW"
+  OSW_region_all_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  
+  ## Combine all the data together for plotting and analysis ##
+  Index_all = rbind(Entire_region_all_y$Index, #Get all the index values together across the different regions 
+                    bind_rows(lapply(OSW_all_y, '[[',1)),
+                    OSW_region_all_y$Index)
+  Index_all$scen = "All data"
+  Density_all = rbind(Entire_region_all_y$Pred, #Get all the density estimates across the different regions 
+                      bind_rows(lapply(OSW_all_y, '[[',2)),
+                      OSW_region_all_y$Pred)
+  Density_all[Density_all$year == Term.year,]
+  Density_all$scen = "All data"
+  
+  ################################################################################################
+  #### Look at the different proposed scenarios                                               ####
+  ################################################################################################
+  ### Create lists for the different data frames ####
+  Index_OSW = list(NA)
+  Density_OSW = list(NA)
+  Scen_mod = list(NA)
+  
+  ### For loop to go through the different scenarios - may be a better option to think through ####
+  
+  for(i in 1:nrow(scen)){
+    print(paste0("Starting model and prediction for scenario this is missing ", scen[i,]$Scenario," of data"))
+    ##############################
+    ## Data set up 
+    ##############################
+    # Start by removing data inside the areas of interest for the different scenario years 
+    if(scen[i,]$Year %in% Start.year){
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(model_data), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      pt.mod = model_data[!model_data$trawl_id %in% pt2a$trawl_id,]
+    }else{#If you are only removing the data for a certain number of years 
+      pt1 = model_data[model_data$year %in%  c(Start.year:scen[i,]$Year),]#Years that still sample the areas of interest 
+      pt2 = model_data[!model_data$year %in% c(Start.year:scen[i,]$Year),]#Years to remove samples inside the OSW 
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(pt2), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt2[!pt2$trawl_id %in% pt2a$trawl_id,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      # 
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = model_data[model_data$year==2023,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      
+      pt.mod = rbind(pt1, 
+                     pt2[!pt2$trawl_id %in% pt2a$trawl_id,]) #Create a data frame that has removed the OSW sample areas for 
+      
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt.mod[pt.mod$year==2022,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+    }
+    
+    ##############################
+    ## Fit model to the new data 
+    ##############################
+    Mod2 = tryCatch({
+      sdmTMB(data = pt.mod,
+             formula = formula(Mod1),
+             mesh = make_mesh(pt.mod, xy_cols = c("lon", "lat"), mesh = OG_mesh$mesh),
+             family = Mod1$family,
+             time = Mod1$time,
+             spatiotemporal = Mod1$spatiotemporal,
+             spatial = Mod1$spatial#,
+           #spatial = list("on","on"),
+           #spatiotemporal = list("off","IID")#,
+          #   spatiotemporal = "IID"
+      )},
+      error = function(e) NA)
+    saveRDS(Mod2, paste0(WD.1, "/sdmTMB_func/Model_",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),".rds"))
+    #Residual check - have this save to a folder somewhere?
+    sanity(Mod2)
+    tidy(Mod2, conf.int = T)
+    # Residual check ####
+  pt.mod$resid = residuals(Mod2, type ='mle-mvn')
+  #pt.mod$resid2 = residuals(Mod2, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_Mod2 <- simulate(Mod2, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_Mod2 == 0)/length(s_Mod2); nrow(pt.mod[pt.mod$cpue_kg_km2==0,])/nrow(pt.mod)#Check that it can handle the # of zeros
+  r_Mod2 = dharma_residuals(s_Mod2, Mod2, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_DHARMa_Residuals_plots_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),".pdf"))
+  plot(r_Mod2)
+  DHARMa::testResiduals(r_Mod2)
+  DHARMa::testZeroInflation(r_Mod2)
+  dev.off()
+    #MCMC-based residuals - much slower to run 
+    # set.seed(123)
+    # samps <- sdmTMBextra::predict_mle_mcmc(Mod2, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+    # r <- residuals(Mod2, "mle-mcmc", mcmc_samples = samps)
+    # qqnorm(r)
+    # abline(a = 0, b = 1)
+    
+    # Spatial check ####
+    OSW_model=ggplot(data = pt.mod, aes(lon, lat, col = resid)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial.png"),
+           OSW_model,
+           height = 10, width = 10, units = "in")
+
+    #     OSW_modelb=ggplot(data = pt.mod, aes(lon, lat, col = resid2)) +
+    #   scale_colour_gradient2() +
+    #   geom_point(size=.1) +
+    #   facet_wrap(~year) +
+    #   coord_fixed()+
+    #   theme_classic()+
+    #   theme(legend.title = element_blank())
+    # 
+    # ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],"_spatial_gamma.png"),
+    #        OSW_modelb,
+    #        height = 10, width = 10, units = "in")
+    
+    ##############################
+    ## Predictions 
+    ##############################
+    #Entire region 
+    Entire_region_OSW_y = Pred_sdm_function(Pred_data = prediction_data,
+                                            model = Mod2,
+                                            Mod_data = pt.mod)
+    #OSW areas - separately
+    OSW_missing_y=list(NA)
+    for(j in 1:length(Proj_df_OSW)){
+      Pred_data1 = Proj_df_OSW[[j]]
+      #Pred_data1$group == unique(OSW_shp$group)[j]
+      OSW_missing_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    }
+    # OSW areas - all together
+    OSW_region_missing_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    
+    ##############################
+    ## Combine predictions together  
+    ##############################
+    Index_OSW[[i]] = rbind(Entire_region_OSW_y$Index, #Get all the index values together across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',1)),
+                           OSW_region_missing_y$Index)
+    Index_OSW[[i]]$scen = scen[i,]$Scenario
+    Density_OSW_df = rbind(Entire_region_OSW_y$Pred, #Get all the density estimates across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',2)),
+                           OSW_region_missing_y$Pred)
+    Density_OSW[[i]] = Density_OSW_df#[Density_OSW_df$year == Term.year,]
+    Density_OSW[[i]]$scen = scen[i,]$Scenario
+    
+  }
+  ##############################
+  ## Performance metrics for index values 
+  ##############################
+  print("Starting performance metrics for the index values")
+  SP_Index = rbind(Index_all,bind_rows(Index_OSW[1:length(Index_OSW)]))#Combine all the regions together 
+  SP_Index = SP_Index %>% 
+    mutate(CI = upr-lwr) #Calculate the CI for each year 
+  SP_term_PM = bind_rows(lapply(split(SP_Index, SP_Index$group), function(x){ #grab the performance metrics 
+    x %>%
+      group_by(group, scen) %>%
+      dplyr::filter(year %in% Term.year) %>%
+      mutate(CI_perc = ((CI - SP_Index[SP_Index$year ==Term.year &
+                                         SP_Index$scen == "All data" &
+                                         SP_Index$group %in% x$group,]$CI)/
+                          ((CI + SP_Index[SP_Index$year ==Term.year &
+                                            SP_Index$scen == "All data" &
+                                            SP_Index$group %in% x$group,]$CI)/2))*100,
+             est_RMSE = sqrt(((est - SP_Index[SP_Index$year ==Term.year &
+                                                SP_Index$scen == "All data" &
+                                                SP_Index$group %in% x$group,]$est))^2)#,
+      )
+  })) %>%
+    dplyr::select(group, scen, CI_perc, est_RMSE)
+  
+  #########################################
+  ## Performance metrics for density values 
+  #########################################
+  #Create lists/vectors to be filled in later 
+  print("Starting performance metrics for the density estimates")
+  Dens_func_values = Dens_PM_func(Dens_data = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+                                  Proj_extent = Proj_extent,
+                                  scen = scen,
+                                  OSW_shp = OSW_shp)
+
+  #######################################################################################
+  return(list(Index = SP_Index,
+              Ind_pm = SP_term_PM,
+              Density = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+              Dens_PM_ER = Dens_func_values$Density_PM_ER,
+              Density_PM_OSW = Dens_func_values$Density_PM_OSW,
+              Density_PM_all = Dens_func_values$Density_PM_all,
+              Density_Dif = Dens_func_values$Density_Dif
+              # Dif_Dens = sp_Dif,
+              # Dens_PM = sp_PM
+  ))
+}
+saveRDS(PROJ_Func, paste0(WD.1, "/Functions/PROJ_Func.rds"))
+
+PROJ_Func_NoST = function(scen = NA, #Data frame of the different scenarios of interest - column 1 is the scenario, column 2 is the terminal year where sampling occurred in the OSW area 
+                     prediction_data = NA, #Data frame for predictions of the sdmTMB model - no years included at the moment
+                     model_data = NA, #Data for the species for fitting the models (in this case the WCGBTS data)
+                     OSW_shp = NA,#SF file (polygon) for the different areas of interest (ensure that there is a column identifying them - here it is called "group")
+                     S.edge = NA,
+                     M.edge = NA,
+                     Start.year = NA,
+                     Term.year = NA, #The terminal year to assess - only pull out the density for this year 
+                     Proj_extent = NA, #Shapefile or data frame to trim the projection
+                     c.off = NA){ #cutoff for the INLA mesh
+  ################################################################################################
+  #### Gather the prediction data frames - specifically separate the individual areas        ####
+  ################################################################################################
+  
+  #The entire prediction data frame is supplied to the function, but we need to specify the data frames for each area of interest
+  
+  #This for loop goes through and pulls out the prediction data inside each area of interest - in this case the four OSW areas 
+  Proj_df_OSW=list(NA)
+  for(x in 1:length(unique(OSW_shp$group))){
+    groups = unique(OSW_shp$group)
+    OSW_a=OSW_shp%>%
+      filter(group==groups[x])
+    
+    OSW_b=st_intersection(prediction_data %>% 
+                            st_as_sf(coords = c("lon", "lat"),
+                                     crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")), OSW_a)
+    OSW_b$lon = st_coordinates(OSW_b)[,1]
+    OSW_b$lat = st_coordinates(OSW_b)[,2]
+    
+    Proj_df_OSW[[x]] = data.frame(OSW_b)
+    Proj_df_OSW[[x]]$group = unique(OSW_shp$group)[x]#Make sure group is labeled correctly 
+  }  
+  names(Proj_df_OSW) = unique(OSW_shp$group)#Name each element of the list by the OSW area
+  
+  ## Now we also want to evaluate on how indices could change if there was evidence to assess and manage these stocks as a north/south west coast stock
+  Proj_df_OSW$North = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd >=40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "North")
+  
+  Proj_df_OSW$South = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd <40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "South")
+  ################################################################################################
+  #### Fit a model with all the data across all years                                         ####
+  ################################################################################################
+  # sdmTMB is utilized here, for this we need to include a mesh and the model data 
+  print(paste0("Starting prediction for all years and all data for ", model_data$common_name[1]))
+  OG_mesh1 = fmesher::fm_mesh_2d_inla(loc = cbind(model_data$lon, model_data$lat),
+                                      max.edge = c(S.edge,M.edge),offset = c(25, 50),
+                                      cutoff = c.off)
+  OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"), mesh = OG_mesh1)
+  plot(OG_mesh)
+  # OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"),
+  #                     cutoff = c.off,
+  #                     type = "cutoff")#Create the original mesh utilizing all data
+  ## Fit the model - currently only including spatial for test purposes ####
+  #Ideally, fit the original model first and then use it as an input into the function?
+  start = Sys.time()
+  Mod1 = tryCatch({ 
+    sdmTMB(data = model_data,
+           formula = cpue_kg_km2 ~ as.factor(year) + s(depth_m,k=3),#Currently including year and depth as variables to consider
+           mesh = OG_mesh,
+           time = "year",
+           #spatiotemporal = "iid",
+           family = tweedie(link = "log"),#Tweedie distribution for the moment 
+           spatial = "on",#list("on","on"),
+           spatiotemporal = "off"#list("off","IID"),
+    )}, error = function(e) NA)
+  print(Sys.time()-start)
+  saveRDS(Mod1, paste0(WD.1, "/sdmTMB_func/Model_",model_data$common_name[1],"_",OSW_shp$Scenario[1],Sys.Date(),"_All_Data_NoST.rds"))
+  # Model check ####
+  sanity(Mod1)
+  print(tidy(Mod1, conf.int = T))
+  # Residual check ####
+  model_data$resid = residuals(Mod1, type ='mle-mvn')
+  #model_data$resid2 = residuals(Mod1, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_mod1 <- simulate(Mod1, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_mod1 == 0)/length(s_mod1); nrow(model_data[model_data$cpue_kg_km2==0,])/nrow(model_data)#Check that it can handle the # of zeros
+  r_mod1 = dharma_residuals(s_mod1, Mod1, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_DHARMa_Residuals_plots_NoST.pdf"))
+  plot(r_mod1)
+  DHARMa::testResiduals(r_mod1)
+  DHARMa::testZeroInflation(r_mod1)
+  dev.off()
+  # qqplot1=ggplot(model_data, aes(sample = resid)) + stat_qq() + stat_qq_line()+
+  #   theme_classic()+
+  #   labs(title = paste0(model_data$common_name[1], ": All data"))
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_qqplot.png"),
+  #        qqplot1,
+  #        height = 4, width = 4, units = "in")
+  #MCMC-based residuals - much slower to run 
+  # set.seed(123)
+  # samps <- sdmTMBextra::predict_mle_mcmc(Mod1, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+  # r <- residuals(Mod1, "mle-mcmc", mcmc_samples = samps)
+  # qqnorm(r)
+  # abline(a = 0, b = 1)
+  
+  # Spatial check ####
+  Mod1_spatial=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial_NoST.png"),
+         Mod1_spatial,
+         height = 10, width = 10, units = "in")
+  
+  #   Mod1_spatialb=ggplot() +
+  #   scale_colour_gradient2() +
+  #   geom_point(data = model_data, aes(lon, lat, col = resid2),size=.1) +
+  #   facet_wrap(~year) +
+  #   coord_fixed()+
+  #   theme_classic()+
+  #   theme(legend.title = element_blank())
+  # 
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_spatial_Gamma.png"),
+  #        Mod1_spatialb,
+  #        height = 10, width = 10, units = "in")
+  
+  ############################
+  ### Predictions         ####
+  ############################
+  
+  #Entire region
+  Entire_region_all_y = Pred_sdm_function(Pred_data = prediction_data,
+                                          model = Mod1,
+                                          Mod_data = model_data)
+  #OSW areas - separately
+  OSW_all_y=list(NA)
+  for(j in 1:length(Proj_df_OSW)){
+    Pred_data1 = Proj_df_OSW[[j]]
+    #Pred_data1$group == unique(OSW_shp$group)[j]
+    OSW_all_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  }
+  # OSW areas - all together
+  Proj_df_OSW_all = bind_rows(Proj_df_OSW[unique(OSW_shp$group)])
+  Proj_df_OSW_all$group = "OSW"
+  OSW_region_all_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  
+  ## Combine all the data together for plotting and analysis ##
+  Index_all = rbind(Entire_region_all_y$Index, #Get all the index values together across the different regions 
+                    bind_rows(lapply(OSW_all_y, '[[',1)),
+                    OSW_region_all_y$Index)
+  Index_all$scen = "All data"
+  Density_all = rbind(Entire_region_all_y$Pred, #Get all the density estimates across the different regions 
+                      bind_rows(lapply(OSW_all_y, '[[',2)),
+                      OSW_region_all_y$Pred)
+  Density_all[Density_all$year == Term.year,]
+  Density_all$scen = "All data"
+  
+  ################################################################################################
+  #### Look at the different proposed scenarios                                               ####
+  ################################################################################################
+  ### Create lists for the different data frames ####
+  Index_OSW = list(NA)
+  Density_OSW = list(NA)
+  Scen_mod = list(NA)
+  
+  ### For loop to go through the different scenarios - may be a better option to think through ####
+  
+  for(i in 1:nrow(scen)){
+    print(paste0("Starting model and prediction for scenario this is missing ", scen[i,]$Scenario," of data"))
+    ##############################
+    ## Data set up 
+    ##############################
+    # Start by removing data inside the areas of interest for the different scenario years 
+    if(scen[i,]$Year %in% Start.year){
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(model_data), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      pt.mod = model_data[!model_data$trawl_id %in% pt2a$trawl_id,]
+    }else{#If you are only removing the data for a certain number of years 
+      pt1 = model_data[model_data$year %in%  c(Start.year:scen[i,]$Year),]#Years that still sample the areas of interest 
+      pt2 = model_data[!model_data$year %in% c(Start.year:scen[i,]$Year),]#Years to remove samples inside the OSW 
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(pt2), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt2[!pt2$trawl_id %in% pt2a$trawl_id,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      # 
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = model_data[model_data$year==2023,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      
+      pt.mod = rbind(pt1, 
+                     pt2[!pt2$trawl_id %in% pt2a$trawl_id,]) #Create a data frame that has removed the OSW sample areas for 
+      
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt.mod[pt.mod$year==2022,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+    }
+    
+    ##############################
+    ## Fit model to the new data 
+    ##############################
+    Mod2 = tryCatch({
+      sdmTMB(data = pt.mod,
+             formula = formula(Mod1),
+             mesh = make_mesh(pt.mod, xy_cols = c("lon", "lat"), mesh = OG_mesh$mesh),
+             family = Mod1$family,
+             time = Mod1$time,
+             spatiotemporal = Mod1$spatiotemporal,
+             spatial = Mod1$spatial#,
+           #spatial = list("on","on"),
+           #spatiotemporal = list("off","IID")#,
+          #   spatiotemporal = "IID"
+      )},
+      error = function(e) NA)
+    saveRDS(Mod2, paste0(WD.1, "/sdmTMB_func/Model_",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_NoST.rds"))
+    #Residual check - have this save to a folder somewhere?
+    sanity(Mod2)
+    tidy(Mod2, conf.int = T)
+    # Residual check ####
+  pt.mod$resid = residuals(Mod2, type ='mle-mvn')
+  #pt.mod$resid2 = residuals(Mod2, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_Mod2 <- simulate(Mod2, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_Mod2 == 0)/length(s_Mod2); nrow(pt.mod[pt.mod$cpue_kg_km2==0,])/nrow(pt.mod)#Check that it can handle the # of zeros
+  r_Mod2 = dharma_residuals(s_Mod2, Mod2, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_DHARMa_Residuals_plots_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_NoST.pdf"))
+  plot(r_Mod2)
+  DHARMa::testResiduals(r_Mod2)
+  DHARMa::testZeroInflation(r_Mod2)
+  dev.off()
+    #MCMC-based residuals - much slower to run 
+    # set.seed(123)
+    # samps <- sdmTMBextra::predict_mle_mcmc(Mod2, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+    # r <- residuals(Mod2, "mle-mcmc", mcmc_samples = samps)
+    # qqnorm(r)
+    # abline(a = 0, b = 1)
+    
+    # Spatial check ####
+    OSW_model=ggplot(data = pt.mod, aes(lon, lat, col = resid)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial_NoST.png"),
+           OSW_model,
+           height = 10, width = 10, units = "in")
+
+    #     OSW_modelb=ggplot(data = pt.mod, aes(lon, lat, col = resid2)) +
+    #   scale_colour_gradient2() +
+    #   geom_point(size=.1) +
+    #   facet_wrap(~year) +
+    #   coord_fixed()+
+    #   theme_classic()+
+    #   theme(legend.title = element_blank())
+    # 
+    # ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],"_spatial_gamma.png"),
+    #        OSW_modelb,
+    #        height = 10, width = 10, units = "in")
+    
+    ##############################
+    ## Predictions 
+    ##############################
+    #Entire region 
+    Entire_region_OSW_y = Pred_sdm_function(Pred_data = prediction_data,
+                                            model = Mod2,
+                                            Mod_data = pt.mod)
+    #OSW areas - separately
+    OSW_missing_y=list(NA)
+    for(j in 1:length(Proj_df_OSW)){
+      Pred_data1 = Proj_df_OSW[[j]]
+      #Pred_data1$group == unique(OSW_shp$group)[j]
+      OSW_missing_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    }
+    # OSW areas - all together
+    OSW_region_missing_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    
+    ##############################
+    ## Combine predictions together  
+    ##############################
+    Index_OSW[[i]] = rbind(Entire_region_OSW_y$Index, #Get all the index values together across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',1)),
+                           OSW_region_missing_y$Index)
+    Index_OSW[[i]]$scen = scen[i,]$Scenario
+    Density_OSW_df = rbind(Entire_region_OSW_y$Pred, #Get all the density estimates across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',2)),
+                           OSW_region_missing_y$Pred)
+    Density_OSW[[i]] = Density_OSW_df#[Density_OSW_df$year == Term.year,]
+    Density_OSW[[i]]$scen = scen[i,]$Scenario
+    
+  }
+  ##############################
+  ## Performance metrics for index values 
+  ##############################
+  print("Starting performance metrics for the index values")
+  SP_Index = rbind(Index_all,bind_rows(Index_OSW[1:length(Index_OSW)]))#Combine all the regions together 
+  SP_Index = SP_Index %>% 
+    mutate(CI = upr-lwr) #Calculate the CI for each year 
+  SP_term_PM = bind_rows(lapply(split(SP_Index, SP_Index$group), function(x){ #grab the performance metrics 
+    x %>%
+      group_by(group, scen) %>%
+      dplyr::filter(year %in% Term.year) %>%
+      mutate(CI_perc = ((CI - SP_Index[SP_Index$year ==Term.year &
+                                         SP_Index$scen == "All data" &
+                                         SP_Index$group %in% x$group,]$CI)/
+                          ((CI + SP_Index[SP_Index$year ==Term.year &
+                                            SP_Index$scen == "All data" &
+                                            SP_Index$group %in% x$group,]$CI)/2))*100,
+             est_RMSE = sqrt(((est - SP_Index[SP_Index$year ==Term.year &
+                                                SP_Index$scen == "All data" &
+                                                SP_Index$group %in% x$group,]$est))^2)#,
+      )
+  })) %>%
+    dplyr::select(group, scen, CI_perc, est_RMSE)
+  
+  #########################################
+  ## Performance metrics for density values 
+  #########################################
+  #Create lists/vectors to be filled in later 
+  print("Starting performance metrics for the density estimates")
+  Dens_func_values = Dens_PM_func(Dens_data = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+                                  Proj_extent = Proj_extent,
+                                  scen = scen,
+                                  OSW_shp = OSW_shp)
+
+  #######################################################################################
+  return(list(Index = SP_Index,
+              Ind_pm = SP_term_PM,
+              Density = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+              Dens_PM_ER = Dens_func_values$Density_PM_ER,
+              Density_PM_OSW = Dens_func_values$Density_PM_OSW,
+              Density_PM_all = Dens_func_values$Density_PM_all,
+              Density_Dif = Dens_func_values$Density_Dif
+              # Dif_Dens = sp_Dif,
+              # Dens_PM = sp_PM
+  ))
+}
+saveRDS(PROJ_Func_NoST, paste0(WD.1, "/Functions/PROJ_Func_NoST.rds"))
+                           
+PROJ_Func_DG = function(scen = NA, #Data frame of the different scenarios of interest - column 1 is the scenario, column 2 is the terminal year where sampling occurred in the OSW area 
+                     prediction_data = NA, #Data frame for predictions of the sdmTMB model - no years included at the moment
+                     model_data = NA, #Data for the species for fitting the models (in this case the WCGBTS data)
+                     OSW_shp = NA,#SF file (polygon) for the different areas of interest (ensure that there is a column identifying them - here it is called "group")
+                     Start.year = NA,
+                     M.edge = NA,
+                     S.edge = NA,
+                     Term.year = NA, #The terminal year to assess - only pull out the density for this year 
+                     Proj_extent = NA, #Shapefile or data frame to trim the projection
+                     c.off = NA){ #cutoff for the INLA mesh
+  ################################################################################################
+  #### Gather the prediction data frames - specifically separate the individual areas        ####
+  ################################################################################################
+  
+  #The entire prediction data frame is supplied to the function, but we need to specify the data frames for each area of interest
+  
+  #This for loop goes through and pulls out the prediction data inside each area of interest - in this case the four OSW areas 
+  Proj_df_OSW=list(NA)
+  for(x in 1:length(unique(OSW_shp$group))){
+    groups = unique(OSW_shp$group)
+    OSW_a=OSW_shp%>%
+      filter(group==groups[x])
+    
+    OSW_b=st_intersection(prediction_data %>% 
+                            st_as_sf(coords = c("lon", "lat"),
+                                     crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")), OSW_a)
+    OSW_b$lon = st_coordinates(OSW_b)[,1]
+    OSW_b$lat = st_coordinates(OSW_b)[,2]
+    
+    Proj_df_OSW[[x]] = data.frame(OSW_b)
+    Proj_df_OSW[[x]]$group = unique(OSW_shp$group)[x]#Make sure group is labeled correctly 
+  }  
+  names(Proj_df_OSW) = unique(OSW_shp$group)#Name each element of the list by the OSW area
+  
+  ## Now we also want to evaluate on how indices could change if there was evidence to assess and manage these stocks as a north/south west coast stock
+  Proj_df_OSW$North = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd >=40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "North")
+  
+  Proj_df_OSW$South = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd <40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "South")
+  ################################################################################################
+  #### Fit a model with all the data across all years                                         ####
+  ################################################################################################
+  # sdmTMB is utilized here, for this we need to include a mesh and the model data 
+  print(paste0("Starting prediction for all years and all data for ", model_data$common_name[1]))
+  OG_mesh1 = fmesher::fm_mesh_2d_inla(loc = cbind(model_data$lon, model_data$lat),
+                                      max.edge = c(S.edge,M.edge),offset = c(25, 50),
+                                      cutoff = c.off)
+  OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"), mesh = OG_mesh1)
+  plot(OG_mesh)
+  # OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"),
+  #                     cutoff = c.off,
+  #                     type = "cutoff")#Create the original mesh utilizing all data
+  ## Fit the model - currently only including spatial for test purposes ####
+  #Ideally, fit the original model first and then use it as an input into the function?
+  start = Sys.time()
+  Mod1 = tryCatch({ 
+    sdmTMB(data = model_data,
+           formula = cpue_kg_km2 ~ as.factor(year) + s(depth_m,k=3),#Currently including year and depth as variables to consider
+           mesh = OG_mesh,
+           time = "year",
+           #spatiotemporal = "iid",
+           family = delta_gamma(),#tweedie(link = "log"),#Tweedie distribution for the moment 
+           spatial = list("on","on"),
+           spatiotemporal = list("off","IID"),
+    )}, error = function(e) NA)
+  print(Sys.time()-start)
+    saveRDS(Mod1, paste0(WD.1, "/sdmTMB_func/Model_",model_data$common_name[1],"_",OSW_shp$Scenario[1],Sys.Date(),"_All_Data.rds"))
+
+  # Model check ####
+  sanity(Mod1)
+  print(tidy(Mod1, conf.int = T))
+  # Residual check ####
+  model_data$resid1 = residuals(Mod1, type ='mle-mvn', model = 1)
+  model_data$resid2 = residuals(Mod1, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_mod1 <- simulate(Mod1, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_mod1 == 0)/length(s_mod1); nrow(model_data[model_data$cpue_kg_km2==0,])/nrow(model_data)#Check that it can handle the # of zeros
+  r_mod1 = dharma_residuals(s_mod1, Mod1, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_DHARMa_Residuals_plots.pdf"))
+  plot(r_mod1)
+  DHARMa::testResiduals(r_mod1)
+  DHARMa::testZeroInflation(r_mod1)
+  dev.off()
+  # qqplot1=ggplot(model_data, aes(sample = resid)) + stat_qq() + stat_qq_line()+
+  #   theme_classic()+
+  #   labs(title = paste0(model_data$common_name[1], ": All data"))
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_qqplot.png"),
+  #        qqplot1,
+  #        height = 4, width = 4, units = "in")
+  #MCMC-based residuals - much slower to run 
+  # set.seed(123)
+  # samps <- sdmTMBextra::predict_mle_mcmc(Mod1, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+  # r <- residuals(Mod1, "mle-mcmc", mcmc_samples = samps)
+  # qqnorm(r)
+  # abline(a = 0, b = 1)
+  
+  # Spatial check ####
+  Mod1_spatial=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid1),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial_Bin.png"),
+         Mod1_spatial,
+         height = 10, width = 10, units = "in")
+  
+    Mod1_spatialb=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid2),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial_Gamma.png"),
+         Mod1_spatialb,
+         height = 10, width = 10, units = "in")
+  
+  ############################
+  ### Predictions         ####
+  ############################
+  
+  #Entire region
+  Entire_region_all_y = Pred_sdm_function(Pred_data = prediction_data,
+                                          model = Mod1,
+                                          Mod_data = model_data)
+  #OSW areas - separately
+  OSW_all_y=list(NA)
+  for(j in 1:length(Proj_df_OSW)){
+    Pred_data1 = Proj_df_OSW[[j]]
+    #Pred_data1$group == unique(OSW_shp$group)[j]
+    OSW_all_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  }
+  # OSW areas - all together
+  Proj_df_OSW_all = bind_rows(Proj_df_OSW[unique(OSW_shp$group)])
+  Proj_df_OSW_all$group = "OSW"
+  OSW_region_all_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  
+  ## Combine all the data together for plotting and analysis ##
+  Index_all = rbind(Entire_region_all_y$Index, #Get all the index values together across the different regions 
+                    bind_rows(lapply(OSW_all_y, '[[',1)),
+                    OSW_region_all_y$Index)
+  Index_all$scen = "All data"
+  Density_all = rbind(Entire_region_all_y$Pred, #Get all the density estimates across the different regions 
+                      bind_rows(lapply(OSW_all_y, '[[',2)),
+                      OSW_region_all_y$Pred)
+  Density_all[Density_all$year == Term.year,]
+  Density_all$scen = "All data"
+  
+  ################################################################################################
+  #### Look at the different proposed scenarios                                               ####
+  ################################################################################################
+  ### Create lists for the different data frames ####
+  Index_OSW = list(NA)
+  Density_OSW = list(NA)
+  Scen_mod = list(NA)
+  
+  ### For loop to go through the different scenarios - may be a better option to think through ####
+  
+  for(i in 1:nrow(scen)){
+    print(paste0("Starting model and prediction for scenario this is missing ", scen[i,]$Scenario," of data"))
+    ##############################
+    ## Data set up 
+    ##############################
+    # Start by removing data inside the areas of interest for the different scenario years 
+    if(scen[i,]$Year %in% Start.year){
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(model_data), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      pt.mod = model_data[!model_data$trawl_id %in% pt2a$trawl_id,]
+    }else{#If you are only removing the data for a certain number of years 
+      pt1 = model_data[model_data$year %in%  c(Start.year:scen[i,]$Year),]#Years that still sample the areas of interest 
+      pt2 = model_data[!model_data$year %in% c(Start.year:scen[i,]$Year),]#Years to remove samples inside the OSW 
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(pt2), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt2[!pt2$trawl_id %in% pt2a$trawl_id,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      # 
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = model_data[model_data$year==2023,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      
+      pt.mod = rbind(pt1, 
+                     pt2[!pt2$trawl_id %in% pt2a$trawl_id,]) #Create a data frame that has removed the OSW sample areas for 
+      
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt.mod[pt.mod$year==2022,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+    }
+    
+    ##############################
+    ## Fit model to the new data 
+    ##############################
+    Mod2 = tryCatch({
+      sdmTMB(data = pt.mod,
+             formula = formula(Mod1),
+             mesh = make_mesh(pt.mod, xy_cols = c("lon", "lat"), mesh = OG_mesh$mesh),
+             family = Mod1$family,
+             time = Mod1$time,
+             #spatiotemporal = Mod1$spatiotemporal,
+           #  spatial = Mod1$spatial,
+           spatial = list("on","on"),
+           spatiotemporal = list("off","IID")#,
+          #   spatiotemporal = "IID"
+      )},
+      error = function(e) NA)
+      saveRDS(Mod2, paste0(WD.1, "/sdmTMB_func/Model_",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),".rds"))
+
+    #Residual check - have this save to a folder somewhere?
+    sanity(Mod2)
+    tidy(Mod2, conf.int = T)
+    # Residual check ####
+  pt.mod$resid1 = residuals(Mod2, type ='mle-mvn', model = 1)
+  pt.mod$resid2 = residuals(Mod2, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_Mod2 <- simulate(Mod2, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_Mod2 == 0)/length(s_Mod2); nrow(pt.mod[pt.mod$cpue_kg_km2==0,])/nrow(pt.mod)#Check that it can handle the # of zeros
+  r_Mod2 = dharma_residuals(s_Mod2, Mod2, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_DHARMa_Residuals_plots_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),".pdf"))
+  plot(r_Mod2)
+  DHARMa::testResiduals(r_Mod2)
+  DHARMa::testZeroInflation(r_Mod2)
+  dev.off()
+    #MCMC-based residuals - much slower to run 
+    # set.seed(123)
+    # samps <- sdmTMBextra::predict_mle_mcmc(Mod2, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+    # r <- residuals(Mod2, "mle-mcmc", mcmc_samples = samps)
+    # qqnorm(r)
+    # abline(a = 0, b = 1)
+    
+    # Spatial check ####
+    OSW_model=ggplot(data = pt.mod, aes(lon, lat, col = resid1)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial_bin.png"),
+           OSW_model,
+           height = 10, width = 10, units = "in")
+
+        OSW_modelb=ggplot(data = pt.mod, aes(lon, lat, col = resid2)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial_gamma.png"),
+           OSW_modelb,
+           height = 10, width = 10, units = "in")
+    
+    ##############################
+    ## Predictions 
+    ##############################
+    #Entire region 
+    Entire_region_OSW_y = Pred_sdm_function(Pred_data = prediction_data,
+                                            model = Mod2,
+                                            Mod_data = pt.mod)
+    #OSW areas - separately
+    OSW_missing_y=list(NA)
+    for(j in 1:length(Proj_df_OSW)){
+      Pred_data1 = Proj_df_OSW[[j]]
+      #Pred_data1$group == unique(OSW_shp$group)[j]
+      OSW_missing_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    }
+    # OSW areas - all together
+    OSW_region_missing_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    
+    ##############################
+    ## Combine predictions together  
+    ##############################
+    Index_OSW[[i]] = rbind(Entire_region_OSW_y$Index, #Get all the index values together across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',1)),
+                           OSW_region_missing_y$Index)
+    Index_OSW[[i]]$scen = scen[i,]$Scenario
+    Density_OSW_df = rbind(Entire_region_OSW_y$Pred, #Get all the density estimates across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',2)),
+                           OSW_region_missing_y$Pred)
+    Density_OSW[[i]] = Density_OSW_df#[Density_OSW_df$year == Term.year,]
+    Density_OSW[[i]]$scen = scen[i,]$Scenario
+    
+  }
+  ##############################
+  ## Performance metrics for index values 
+  ##############################
+  print("Starting performance metrics for the index values")
+  SP_Index = rbind(Index_all,bind_rows(Index_OSW[1:length(Index_OSW)]))#Combine all the regions together 
+  SP_Index = SP_Index %>% 
+    mutate(CI = upr-lwr) #Calculate the CI for each year 
+  SP_term_PM = bind_rows(lapply(split(SP_Index, SP_Index$group), function(x){ #grab the performance metrics 
+    x %>%
+      group_by(group, scen) %>%
+      dplyr::filter(year %in% Term.year) %>%
+      mutate(CI_perc = ((CI - SP_Index[SP_Index$year ==Term.year &
+                                         SP_Index$scen == "All data" &
+                                         SP_Index$group %in% x$group,]$CI)/
+                          ((CI + SP_Index[SP_Index$year ==Term.year &
+                                            SP_Index$scen == "All data" &
+                                            SP_Index$group %in% x$group,]$CI)/2))*100,
+             est_RMSE = sqrt(((est - SP_Index[SP_Index$year ==Term.year &
+                                                SP_Index$scen == "All data" &
+                                                SP_Index$group %in% x$group,]$est))^2)#,
+      )
+  })) %>%
+    dplyr::select(group, scen, CI_perc, est_RMSE)
+  
+  #########################################
+  ## Performance metrics for density values 
+  #########################################
+  #Create lists/vectors to be filled in later 
+  print("Starting performance metrics for the density estimates")
+  Dens_func_values = Dens_PM_func_DG(Dens_data = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+                                  Proj_extent = Proj_extent,
+                                  scen = scen,
+                                  OSW_shp = OSW_shp)
+
+  #######################################################################################
+  return(list(Index = SP_Index,
+              Ind_pm = SP_term_PM,
+              Density = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+              Dens_PM_ER = Dens_func_values$Density_PM_ER,
+              Density_PM_OSW = Dens_func_values$Density_PM_OSW,
+              Density_PM_all = Dens_func_values$Density_PM_all,
+              Density_Dif = Dens_func_values$Density_Dif
+              # Dif_Dens = sp_Dif,
+              # Dens_PM = sp_PM
+  ))
+}
+
+saveRDS(PROJ_Func_DG, paste0(WD.1, "/Functions/PROJ_Func_DG.rds"))
+
+
+PROJ_Func_DG_NoST = function(scen = NA, #Data frame of the different scenarios of interest - column 1 is the scenario, column 2 is the terminal year where sampling occurred in the OSW area 
+                     prediction_data = NA, #Data frame for predictions of the sdmTMB model - no years included at the moment
+                     model_data = NA, #Data for the species for fitting the models (in this case the WCGBTS data)
+                     OSW_shp = NA,#SF file (polygon) for the different areas of interest (ensure that there is a column identifying them - here it is called "group")
+                     Start.year = NA,
+                     M.edge = NA,
+                     S.edge = NA,
+                     Term.year = NA, #The terminal year to assess - only pull out the density for this year 
+                     Proj_extent = NA, #Shapefile or data frame to trim the projection
+                     c.off = NA){ #cutoff for the INLA mesh
+  ################################################################################################
+  #### Gather the prediction data frames - specifically separate the individual areas        ####
+  ################################################################################################
+  
+  #The entire prediction data frame is supplied to the function, but we need to specify the data frames for each area of interest
+  
+  #This for loop goes through and pulls out the prediction data inside each area of interest - in this case the four OSW areas 
+  Proj_df_OSW=list(NA)
+  for(x in 1:length(unique(OSW_shp$group))){
+    groups = unique(OSW_shp$group)
+    OSW_a=OSW_shp%>%
+      filter(group==groups[x])
+    
+    OSW_b=st_intersection(prediction_data %>% 
+                            st_as_sf(coords = c("lon", "lat"),
+                                     crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")), OSW_a)
+    OSW_b$lon = st_coordinates(OSW_b)[,1]
+    OSW_b$lat = st_coordinates(OSW_b)[,2]
+    
+    Proj_df_OSW[[x]] = data.frame(OSW_b)
+    Proj_df_OSW[[x]]$group = unique(OSW_shp$group)[x]#Make sure group is labeled correctly 
+  }  
+  names(Proj_df_OSW) = unique(OSW_shp$group)#Name each element of the list by the OSW area
+  
+  ## Now we also want to evaluate on how indices could change if there was evidence to assess and manage these stocks as a north/south west coast stock
+  Proj_df_OSW$North = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd >=40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "North")
+  
+  Proj_df_OSW$South = prediction_data %>% select(lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"),
+             crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+    st_transform(crs = st_crs("+proj=longlat + datum=WGS84 + no_dfs")) %>% 
+    st_coordinates() %>% as_tibble() %>% rename(Lon_dd = X, Lat_dd = Y) %>%
+    cbind(prediction_data) %>%
+    filter(Lat_dd <40.16667) %>% #40.10 management line for the North South Division 
+    mutate(group = "South")
+  ################################################################################################
+  #### Fit a model with all the data across all years                                         ####
+  ################################################################################################
+  # sdmTMB is utilized here, for this we need to include a mesh and the model data 
+  print(paste0("Starting prediction for all years and all data for ", model_data$common_name[1]))
+  OG_mesh1 = fmesher::fm_mesh_2d_inla(loc = cbind(model_data$lon, model_data$lat),
+                                      max.edge = c(S.edge,M.edge),offset = c(25, 50),
+                                      cutoff = c.off)
+  OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"), mesh = OG_mesh1)
+  plot(OG_mesh)
+  # OG_mesh = make_mesh(model_data, xy_cols = c("lon", "lat"),
+  #                     cutoff = c.off,
+  #                     type = "cutoff")#Create the original mesh utilizing all data
+  ## Fit the model - currently only including spatial for test purposes ####
+  #Ideally, fit the original model first and then use it as an input into the function?
+  start = Sys.time()
+  Mod1 = tryCatch({ 
+    sdmTMB(data = model_data,
+           formula = cpue_kg_km2 ~ as.factor(year) + s(depth_m,k=3),#Currently including year and depth as variables to consider
+           mesh = OG_mesh,
+           time = "year",
+           #spatiotemporal = "iid",
+           family = delta_gamma(),#tweedie(link = "log"),#Tweedie distribution for the moment 
+           spatial = list("on","on"),
+           spatiotemporal = list("off","off"),
+    )}, error = function(e) NA)
+  print(Sys.time()-start)
+    saveRDS(Mod1, paste0(WD.1, "/sdmTMB_func/Model_",model_data$common_name[1],"_",OSW_shp$Scenario[1],Sys.Date(),"_All_Data_NoST.rds"))
+
+  # Model check ####
+  sanity(Mod1)
+  print(tidy(Mod1, conf.int = T))
+  # Residual check ####
+  model_data$resid1 = residuals(Mod1, type ='mle-mvn', model = 1)
+  model_data$resid2 = residuals(Mod1, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_mod1 <- simulate(Mod1, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_mod1 == 0)/length(s_mod1); nrow(model_data[model_data$cpue_kg_km2==0,])/nrow(model_data)#Check that it can handle the # of zeros
+  r_mod1 = dharma_residuals(s_mod1, Mod1, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_DHARMa_Residuals_plots_NoST.pdf"))
+  plot(r_mod1)
+  DHARMa::testResiduals(r_mod1)
+  DHARMa::testZeroInflation(r_mod1)
+  dev.off()
+  # qqplot1=ggplot(model_data, aes(sample = resid)) + stat_qq() + stat_qq_line()+
+  #   theme_classic()+
+  #   labs(title = paste0(model_data$common_name[1], ": All data"))
+  # ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],"_all_data_qqplot.png"),
+  #        qqplot1,
+  #        height = 4, width = 4, units = "in")
+  #MCMC-based residuals - much slower to run 
+  # set.seed(123)
+  # samps <- sdmTMBextra::predict_mle_mcmc(Mod1, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+  # r <- residuals(Mod1, "mle-mcmc", mcmc_samples = samps)
+  # qqnorm(r)
+  # abline(a = 0, b = 1)
+  
+  # Spatial check ####
+  Mod1_spatial=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid1),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial_Bin_NoST.png"),
+         Mod1_spatial,
+         height = 10, width = 10, units = "in")
+  
+    Mod1_spatialb=ggplot() +
+    scale_colour_gradient2() +
+    geom_point(data = model_data, aes(lon, lat, col = resid2),size=.1) +
+    facet_wrap(~year) +
+    coord_fixed()+
+    theme_classic()+
+    theme(legend.title = element_blank())
+  
+  ggsave(paste0(WD.1, "/Plots/Resid/",model_data$common_name[1],Sys.Date(),"_all_data_spatial_Gamma_NoST.png"),
+         Mod1_spatialb,
+         height = 10, width = 10, units = "in")
+  
+  ############################
+  ### Predictions         ####
+  ############################
+  
+  #Entire region
+  Entire_region_all_y = Pred_sdm_function(Pred_data = prediction_data,
+                                          model = Mod1,
+                                          Mod_data = model_data)
+  #OSW areas - separately
+  OSW_all_y=list(NA)
+  for(j in 1:length(Proj_df_OSW)){
+    Pred_data1 = Proj_df_OSW[[j]]
+    #Pred_data1$group == unique(OSW_shp$group)[j]
+    OSW_all_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  }
+  # OSW areas - all together
+  Proj_df_OSW_all = bind_rows(Proj_df_OSW[unique(OSW_shp$group)])
+  Proj_df_OSW_all$group = "OSW"
+  OSW_region_all_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                       model = Mod1,
+                                       Mod_data = model_data)
+  
+  ## Combine all the data together for plotting and analysis ##
+  Index_all = rbind(Entire_region_all_y$Index, #Get all the index values together across the different regions 
+                    bind_rows(lapply(OSW_all_y, '[[',1)),
+                    OSW_region_all_y$Index)
+  Index_all$scen = "All data"
+  Density_all = rbind(Entire_region_all_y$Pred, #Get all the density estimates across the different regions 
+                      bind_rows(lapply(OSW_all_y, '[[',2)),
+                      OSW_region_all_y$Pred)
+  Density_all[Density_all$year == Term.year,]
+  Density_all$scen = "All data"
+  
+  ################################################################################################
+  #### Look at the different proposed scenarios                                               ####
+  ################################################################################################
+  ### Create lists for the different data frames ####
+  Index_OSW = list(NA)
+  Density_OSW = list(NA)
+  Scen_mod = list(NA)
+  
+  ### For loop to go through the different scenarios - may be a better option to think through ####
+  
+  for(i in 1:nrow(scen)){
+    print(paste0("Starting model and prediction for scenario this is missing ", scen[i,]$Scenario," of data"))
+    ##############################
+    ## Data set up 
+    ##############################
+    # Start by removing data inside the areas of interest for the different scenario years 
+    if(scen[i,]$Year %in% Start.year){
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(model_data), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      pt.mod = model_data[!model_data$trawl_id %in% pt2a$trawl_id,]
+    }else{#If you are only removing the data for a certain number of years 
+      pt1 = model_data[model_data$year %in%  c(Start.year:scen[i,]$Year),]#Years that still sample the areas of interest 
+      pt2 = model_data[!model_data$year %in% c(Start.year:scen[i,]$Year),]#Years to remove samples inside the OSW 
+      pt2a = data.frame(st_intersection(st_as_sf(data.frame(pt2), coords = c("lon", "lat"),
+                                                 crs = "+proj=utm +zone=10 +datum=WGS84 +units=km"), 
+                                        OSW_shp))
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt2[!pt2$trawl_id %in% pt2a$trawl_id,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      # 
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = model_data[model_data$year==2023,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+      
+      pt.mod = rbind(pt1, 
+                     pt2[!pt2$trawl_id %in% pt2a$trawl_id,]) #Create a data frame that has removed the OSW sample areas for 
+      
+      # ggplot(coast_outline)+
+      #   geom_sf()+
+      #   geom_point(data = pt.mod[pt.mod$year==2022,], aes(x = lon, y=lat), size = .2)+
+      #   geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .3)
+    }
+    
+    ##############################
+    ## Fit model to the new data 
+    ##############################
+    Mod2 = tryCatch({
+      sdmTMB(data = pt.mod,
+             formula = formula(Mod1),
+             mesh = make_mesh(pt.mod, xy_cols = c("lon", "lat"), mesh = OG_mesh$mesh),
+             family = Mod1$family,
+             time = Mod1$time,
+             #spatiotemporal = Mod1$spatiotemporal,
+           #  spatial = Mod1$spatial,
+           spatial = list("on","on"),
+           spatiotemporal = list("off","off")#,
+          #   spatiotemporal = "IID"
+      )},
+      error = function(e) NA)
+      saveRDS(Mod2, paste0(WD.1, "/sdmTMB_func/Model_",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_NoST.rds"))
+
+    #Residual check - have this save to a folder somewhere?
+    sanity(Mod2)
+    tidy(Mod2, conf.int = T)
+    # Residual check ####
+  pt.mod$resid1 = residuals(Mod2, type ='mle-mvn', model = 1)
+  pt.mod$resid2 = residuals(Mod2, type ='mle-mvn', model = 2)
+  #Simulate residuals for DHARMA analysis
+  start = Sys.time()
+  s_Mod2 <- simulate(Mod2, nsim = 1000, type = "mle-mvn")
+  print(Sys.time()-start)
+
+  sum(s_Mod2 == 0)/length(s_Mod2); nrow(pt.mod[pt.mod$cpue_kg_km2==0,])/nrow(pt.mod)#Check that it can handle the # of zeros
+  r_Mod2 = dharma_residuals(s_Mod2, Mod2, return_DHARMa = T)
+  pdf(file = paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_DHARMa_Residuals_plots_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_NoST.pdf"))
+  plot(r_Mod2)
+  DHARMa::testResiduals(r_Mod2)
+  DHARMa::testZeroInflation(r_Mod2)
+  dev.off()
+    #MCMC-based residuals - much slower to run 
+    # set.seed(123)
+    # samps <- sdmTMBextra::predict_mle_mcmc(Mod2, mcmc_warmup = 100, mcmc_iter = 101)#Currently including a short number of warmup and iterations - just given that it is a trial option 
+    # r <- residuals(Mod2, "mle-mcmc", mcmc_samples = samps)
+    # qqnorm(r)
+    # abline(a = 0, b = 1)
+    
+    # Spatial check ####
+    OSW_model=ggplot(data = pt.mod, aes(lon, lat, col = resid1)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial_bin_NoST.png"),
+           OSW_model,
+           height = 10, width = 10, units = "in")
+
+        OSW_modelb=ggplot(data = pt.mod, aes(lon, lat, col = resid2)) +
+      scale_colour_gradient2() +
+      geom_point(size=.1) +
+      facet_wrap(~year) +
+      coord_fixed()+
+      theme_classic()+
+      theme(legend.title = element_blank())
+    
+    ggsave(paste0(WD.1, "/Plots/Resid/",pt.mod$common_name[1],"_",OSW_shp$Scenario[1],"_",scen$Scenario[i],Sys.Date(),"_spatial_gamma_NoST.png"),
+           OSW_modelb,
+           height = 10, width = 10, units = "in")
+    
+    ##############################
+    ## Predictions 
+    ##############################
+    #Entire region 
+    Entire_region_OSW_y = Pred_sdm_function(Pred_data = prediction_data,
+                                            model = Mod2,
+                                            Mod_data = pt.mod)
+    #OSW areas - separately
+    OSW_missing_y=list(NA)
+    for(j in 1:length(Proj_df_OSW)){
+      Pred_data1 = Proj_df_OSW[[j]]
+      #Pred_data1$group == unique(OSW_shp$group)[j]
+      OSW_missing_y[[j]] = Pred_sdm_function(Pred_data = Pred_data1,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    }
+    # OSW areas - all together
+    OSW_region_missing_y = Pred_sdm_function(Pred_data = Proj_df_OSW_all,
+                                             model = Mod2,
+                                             Mod_data = pt.mod)
+    
+    ##############################
+    ## Combine predictions together  
+    ##############################
+    Index_OSW[[i]] = rbind(Entire_region_OSW_y$Index, #Get all the index values together across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',1)),
+                           OSW_region_missing_y$Index)
+    Index_OSW[[i]]$scen = scen[i,]$Scenario
+    Density_OSW_df = rbind(Entire_region_OSW_y$Pred, #Get all the density estimates across the different regions 
+                           bind_rows(lapply(OSW_missing_y, '[[',2)),
+                           OSW_region_missing_y$Pred)
+    Density_OSW[[i]] = Density_OSW_df#[Density_OSW_df$year == Term.year,]
+    Density_OSW[[i]]$scen = scen[i,]$Scenario
+    
+  }
+  ##############################
+  ## Performance metrics for index values 
+  ##############################
+  print("Starting performance metrics for the index values")
+  SP_Index = rbind(Index_all,bind_rows(Index_OSW[1:length(Index_OSW)]))#Combine all the regions together 
+  SP_Index = SP_Index %>% 
+    mutate(CI = upr-lwr) #Calculate the CI for each year 
+  SP_term_PM = bind_rows(lapply(split(SP_Index, SP_Index$group), function(x){ #grab the performance metrics 
+    x %>%
+      group_by(group, scen) %>%
+      dplyr::filter(year %in% Term.year) %>%
+      mutate(CI_perc = ((CI - SP_Index[SP_Index$year ==Term.year &
+                                         SP_Index$scen == "All data" &
+                                         SP_Index$group %in% x$group,]$CI)/
+                          ((CI + SP_Index[SP_Index$year ==Term.year &
+                                            SP_Index$scen == "All data" &
+                                            SP_Index$group %in% x$group,]$CI)/2))*100,
+             est_RMSE = sqrt(((est - SP_Index[SP_Index$year ==Term.year &
+                                                SP_Index$scen == "All data" &
+                                                SP_Index$group %in% x$group,]$est))^2)#,
+      )
+  })) %>%
+    dplyr::select(group, scen, CI_perc, est_RMSE)
+  
+  #########################################
+  ## Performance metrics for density values 
+  #########################################
+  #Create lists/vectors to be filled in later 
+  print("Starting performance metrics for the density estimates")
+  Dens_func_values = Dens_PM_func_DG(Dens_data = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+                                  Proj_extent = Proj_extent,
+                                  scen = scen,
+                                  OSW_shp = OSW_shp)
+
+  #######################################################################################
+  return(list(Index = SP_Index,
+              Ind_pm = SP_term_PM,
+              Density = rbind(Density_all,bind_rows(Density_OSW[1:length(Density_OSW)])),
+              Dens_PM_ER = Dens_func_values$Density_PM_ER,
+              Density_PM_OSW = Dens_func_values$Density_PM_OSW,
+              Density_PM_all = Dens_func_values$Density_PM_all,
+              Density_Dif = Dens_func_values$Density_Dif
+              # Dif_Dens = sp_Dif,
+              # Dens_PM = sp_PM
+  ))
+}
+
+saveRDS(PROJ_Func_DG_NoST, paste0(WD.1, "/Functions/PROJ_Func_DG_NoST.rds"))
+```
+
+
+## Plotting functions 
+
+The first function is a function that collects and scales the index values from the projection function to the mean of the "All Data" scenario across multiple spatial scales. Function returns both the scaled index values and plots. 
+
+```{r plotting fucntions index scaling }
+
+Ind_func = function(dt1 = NA,#Index data from the sdm function
+                    Spec_title = NA,
+                    lev_scen = NA,#Levels for the different scenarios
+                    lev_osw = NA){#Levels for the different OSW areas 
+  dt_num = dt1 %>%
+    filter(scen == "All data", !is.na(est)) %>%
+    group_by(group) %>%
+    summarise(mean = mean(est))
+  
+  Scaled_ind=merge(dt_num,  dt1 %>%
+    group_by(group, scen), by = "group" ) %>%
+    reframe(group = .[[1]], 
+            scen = scen,
+            year = year,
+            est_s = est/mean,
+              upr_s = upr/mean,
+              lwr_s = lwr/mean)
+
+    Scaled_ind$scen = factor(Scaled_ind$scen,
+                      levels = lev_scen)#Assign the levels 
+    Scaled_ind$group = factor(Scaled_ind$group,
+                       levels = lev_osw)#Assign the levels 
+    Scaled_plot = ggplot(Scaled_ind, aes(as.numeric(as.character(year)), est_s, colour = scen, fill = scen, lty = scen)) +
+      geom_hline(yintercept = 1, lwd=.4, lty = 2)+
+      geom_line(lwd = .4) +
+      geom_ribbon(aes(ymin = lwr_s, ymax = upr_s), alpha = 0.1, colour = NA) +
+      xlab('Year') + ylab('Mean scaled biomass estimate (kg)')+
+      labs(title = paste0(Spec_title)) + 
+      scale_colour_viridis_d(name = "Scenario")+
+      scale_fill_viridis_d(name = "Scenario")+
+      scale_linetype(name = "Scenario")+
+      facet_wrap(~group)+
+      theme_classic() +
+      scale_x_continuous(expand = c(0,0))+
+      scale_y_continuous(expand = c(0,0), 
+                         limits = c(0,max(round(Scaled_ind$upr_s,0))))+
+      theme(legend.location = "bottom")
+
+  # ggsave(paste0(WD.1, "/Plots/Index/",Spec_title,"_scaled_index.png"), Scaled_plot, 
+  #        height = 4, width = 6, units = "in")
+  return(list(Scaled_data = Scaled_ind,
+              Scaled_plot = Scaled_plot))
+}
+
+saveRDS(Ind_func, paste0(WD.1, "/Functions/Ind_func.rds"))#Index function 
+
+```
+
+```{r plotting fucntions Index performance metrics  }
+
+Ind_PM_func = function(dt1 = NA, 
+                       lev_scen = NA,
+                       lev_osw = NA, 
+                       Spec_title = NA,
+                       scen = NA){
+  #Set up the data - calculate CV and SD for the index 
+  n_dens=dt1  %>%
+    group_by(group) %>%
+    count()
+  n_dens$n = n_dens$n/length(unique(dt1$year))#Get the number of grid cells for each index 
+  
+  dt1 = merge(dt1, n_dens, by = "group")
+  dt1 = dt1 %>%
+    mutate(SD_nolog = ((upr-est)/1.96)#/sqrt(n) - ASSUMES 95% CI
+         )
+  dt1$CV = dt1$SD_nolog/dt1$est #Calculate CV
+  
+  #Organize data to calculate differences in CV and performance metrics for est
+  group_est = list(NA)
+  for(i in 1:length(unique(scen$Scenario))){
+          ### Part 1 - set up the data frame ####
+          #Create dataframe of density where things are properly labeled and estimate is Exp
+    df1 = dt1 %>%
+      dplyr::select(year, est, group, scen, CV) %>%
+      rename(Scenario = scen) 
+      #Create two data frames for the two different scenarios of concern 
+    df_scen = df1 %>%
+      filter(Scenario == unique(scen$Scenario)[i]) %>%
+      select(year, est, CV, group)
+    colnames(df_scen) = c("year", paste0(unique(scen$Scenario)[i],"_est"),
+                          paste0(unique(scen$Scenario)[i],"_CV"),"group")
+    df_all_data = df1 %>%
+      filter(Scenario == "All data") %>%
+      select(year, est, CV ,group) %>%
+      rename("All data_est" = est,
+             "All data_cv" = CV)   
+      #Merge the two dataframes together 
+    DF_dif = merge(df_all_data, df_scen, by = c("year", "group"))
+    group_est[[i]] = DF_dif %>% 
+      mutate(Dif_est = .[[5]]-.[[3]],
+             Dif_CV = .[[6]]-.[[4]],
+             scen = unique(scen$Scenario)[i]) 
+    colnames(group_est[[i]]) = c("year", "group","All data_est","All data_cv",
+                                 "Est","CV","Dif_est","Dif_cv", "scen")
+  }
+  pm_ind = bind_rows(group_est)  
+  
+  #Performance metric - CV 
+
+   pm_ind$scen = factor(pm_ind$scen, levels = lev_scen)
+   pm_ind$group = factor(pm_ind$group, levels = lev_osw)
+   pm_ind$Spec = Spec_title
+   CV_year_plot = ggplot(pm_ind, aes(x = year, y = Dif_cv, colour = scen, lty = scen))+
+     geom_hline(yintercept = 0, colour = "grey", lty = 2)+
+     geom_point(size = .4)+
+     geom_line()+
+     scale_colour_viridis_d(name = "Scenario")+
+     scale_linetype(name = "Scenario")+
+     facet_nested(Spec~group) + 
+     labs(x = " ", y = "Difference in year CV estimates")+
+     scale_y_continuous(expand=c(0,0)) + 
+     theme_classic()+
+     theme(legend.position = "bottom",
+           strip.placement = "outside")
+   
+   ggsave(paste0(WD.1, "/Plots/Index_pm/",Spec_title,"_year_CV.png"), CV_year_plot, 
+         height = 4, width = 10, units = "in")
+   
+   pm_CV = pm_ind %>%
+     group_by(group, scen) %>%
+     summarize(mean_dif = mean(na.omit(Dif_cv)))
+  
+    pm_CV$Spec = Spec_title
+
+   CV_mean_plot = ggplot(pm_CV, aes(x = scen, y = mean_dif))+
+     geom_bar(stat = "identity", position = position_dodge(0.9))+
+     #labs(title = paste0(Spec_title)) + 
+     facet_nested(Spec~group) + 
+     theme_classic()+
+     theme(axis.text = element_text(size = 5))+
+     geom_hline(yintercept = 0) + 
+     scale_fill_discrete(name = " ")+
+     labs(x = "Scenarios", y = "Average difference in CVs")+
+     scale_y_continuous(expand=c(0,0), limits = c(0,max(pm_CV$mean_dif)+.01))+
+     scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+     theme(strip.placement = "outside")
+   
+      ggsave(paste0(WD.1, "/Plots/Index_pm/",Spec_title,"_year_mean.png"), CV_mean_plot, 
+         height = 3, width = 12, units = "in")
+
+   ## Performance metric - Index point estimate 
+   pm_ind2 = pm_ind[complete.cases(pm_ind),] %>%
+     group_by(group, scen) %>%
+     summarise(RMSE = sqrt((sum((Dif_est)^2))/length(unique(pm_ind$year))),
+               MAE = abs(sum(Dif_est))/length(unique(pm_ind$year))) 
+   
+   pm_ind2$scen = factor(pm_ind2$scen, levels = lev_scen)
+   pm_ind2$group = factor(pm_ind2$group, levels = lev_osw)
+   
+   pm_ind3=pm_ind2 %>%
+     pivot_longer(c(RMSE, MAE), names_to = "Error", values_to = "Val")
+   
+   pm_ind3$Spec = Spec_title
+
+   Ind_PM_plot  = ggplot(pm_ind3, aes(x = scen, y = Val, fill = Error))+
+     geom_bar(stat = "identity", position = position_dodge(0.9))+
+     facet_nested(Spec~group) + 
+     theme_classic()+
+     theme(axis.text = element_text(size = 5))+
+     geom_hline(yintercept = 0) + 
+     scale_fill_discrete(name = " ")+
+     labs(x = "Scenarios", y = "Performance metrics for biomass estimates")+
+     scale_y_continuous(expand=c(0,0))+
+     scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+     theme(strip.placement = "outside")
+   
+   ggsave(paste0(WD.1, "/Plots/Index_pm/",Spec_title,"_ind_PM.png"), Ind_PM_plot, 
+          height = 3, width = 12, units = "in")
+
+   return(list(PM_ind = pm_ind,
+          CV_mean_plot = CV_mean_plot,
+          CV_year_plot = CV_year_plot,
+          Ind_PM_plot = Ind_PM_plot))
+}
+saveRDS(Ind_PM_func, paste0(WD.1, "/Functions/Ind_PM_func.rds"))
+
+```
+
+```{r plotting fucntions Density Performance Metrics across entire region  }
+
+Den_pm_ER_plot_Func = function(Den_data_ER = NA,
+                            OSW_shp = NA,
+                            lev_scen = NA,
+                            Coast = NA,
+                            Species = NA){
+    Den_data_ER$scen = factor(Den_data_ER$scen,
+                           levels = lev_scen)#Assign the levels 
+
+    gr_plot_OSW_MAE = ggplot()+
+        geom_sf(data=Coast)+
+      geom_tile(data = Den_data_ER, 
+                aes(x=X, y=Y, ,fill = MAE), size = .1)+
+      facet_nested(~scen)+
+    scale_fill_gradient2(low = "#2166ac",
+                                    mid = "#f7fbff",
+                                    high = "#084594",
+                                    midpoint = quantile(Den_data_ER$MAE, 0.5),
+                                    limits = c(0, quantile(Den_data_ER$MAE, 0.999)),
+                           na.value = "#084594"
+                           )+
+      theme_classic()+
+      xlim(min(Den_data_ER$X),
+           max(Den_data_ER$X))+
+      ylim(min(Den_data_ER$Y),
+           max(Den_data_ER$Y))+
+      geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .05)+
+      theme(axis.text = element_blank(),
+            axis.title = element_blank(),
+            axis.line = element_blank(),
+            axis.ticks = element_blank(), 
+            legend.key.width = unit(2, "cm"),
+            legend.position = "bottom",
+            # strip.background.y = element_blank(),
+            # strip.text.y = element_blank(),
+            plot.margin = unit(c(.1,0,.1,0), "cm")
+            )
+
+    gr_plot_OSW_RMSE = ggplot()+
+              geom_sf(data=Coast)+
+      geom_tile(data = Den_data_ER, 
+                aes(x=X, y=Y,fill = RMSE), size = .1)+
+      facet_nested(~scen)+
+scale_fill_gradient2(low = "#2166ac",
+                                    mid = "#f7f7f7",
+                                    high = "#b2182b",
+                                    midpoint = quantile(Den_data_ER$RMSE, 0.5),
+                                    limits = c(0, quantile(Den_data_ER$RMSE, 0.999)),
+                           na.value = "#b2182b"
+                           )+
+      theme_classic()+
+      xlim(min(Den_data_ER$X),
+           max(Den_data_ER$X))+
+      ylim(min(Den_data_ER$Y),
+           max(Den_data_ER$Y))+
+      geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .05)+
+      theme(axis.text = element_blank(),
+            axis.title = element_blank(),
+            axis.line = element_blank(),
+            axis.ticks = element_blank(), 
+            legend.key.width = unit(2, "cm"),
+            legend.position = "bottom",
+            # strip.background.y = element_blank(),
+            # strip.text.y = element_blank(),
+            plot.margin = unit(c(.1,0,.1,0), "cm")
+            )
+
+    ggsave(paste0(WD.1, "/Plots/Density/Entire region/",Species,"_RMSE_", Sys.Date(),".png"),gr_plot_OSW_RMSE, 
+         height = 4, width = 6, units = "in")
+    
+    ggsave(paste0(WD.1, "/Plots/Density/Entire region/",Species,"_MAE_",Sys.Date(),".png"),gr_plot_OSW_MAE, 
+         height = 4, width = 6, units = "in")
+    
+    return(list(RMSE_plot = gr_plot_OSW_RMSE,
+                MAE_plot = gr_plot_OSW_MAE))
+
+}
+
+saveRDS(Den_pm_ER_plot_Func, paste0(WD.1, "/Functions/Den_pm_ER_plot_Func.rds"))#Index function 
+
+```
+
+```{r plotting function density plotting function}
+Dens_plot_func = function(Dens_data = NA,
+                         #Dens_dif = NA,
+                        scen = NA,
+                        Proj_extent = NA,
+                        OSW_shp = NA,
+                        Coast = NA,
+                        lev_scen = NA, 
+                        Term.year = NA){
+  # List to be filled 
+    SP_dens = Dens_data
+    SP_dens_ER = Dens_data %>%
+      filter(group %in% "Entire region")
+    
+    group_dif_ER = list()
+    gr_group_xy <- list()
+    gr_group = list()
+    gr_pred_group = list()
+    group_dif = list()
+    group_list = list()
+    
+    #Grab points for plotting - entire region 
+    gr=st_bbox(SP_dens[SP_dens$scen=="All data",] %>%
+                 st_as_sf(coords = c("lon", "lat"),
+                          crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+      st_make_grid(cellsize=.5, what='centers')%>%
+      st_as_sf() %>%
+      st_intersection(st_as_sfc((Proj_extent)))
+    gr_xy <- st_coordinates(gr)
+
+    #Grab points for plotting - OSW areas 
+    for(i in 1:length(unique(OSW_shp$group))){ 
+    #Create a data frame for each OSW area
+      gr_group[[i]]= gr %>%
+        st_intersection(st_as_sfc(OSW_shp[OSW_shp$group==unique(OSW_shp$group)[i],]))
+      gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+    }
+    names(gr_group) = unique(OSW_shp$group)
+    names(gr_group_xy) = unique(OSW_shp$group)
+
+    
+    #Now calculate the density performance metrics 
+    sp_PM = SP_dens_ER %>%
+      filter(year == Term.year) %>%
+      select(lon, lat, group, year, est, scen) %>%
+      mutate(est2 = exp(est)) %>%
+      rename(X = lon,
+             Y = lat)
+
+    gr_pred_dif = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      pred_points <- x %>%
+      dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points,gr_xy,k=1)$nn.idx
+      gr_pred <- gr_xy %>% as_tibble() %>% mutate(Est=x$est2[nns])
+      gr_pred$scen = x$scen[1]
+      return(gr_pred)
+      }))
+
+    gr_pred_dif_OSW = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      scen_list = list()
+      for(i in 1:length(gr_group_xy)){
+        pred_points <- x %>%
+          dplyr::select(X,Y) %>% as.matrix()
+        nns <- nn2(pred_points,gr_group_xy[[i]],k=1)$nn.idx
+        gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Est=x$est2[nns])
+        gr_pred$scen = x$scen[1]
+        gr_pred$OSW = names(gr_group_xy)[i]
+        scen_list[[i]] = gr_pred
+        }
+      return(bind_rows(scen_list))
+      }))
+    ## Plots 
+    
+        gr_pred_dif$scen = factor(gr_pred_dif$scen,
+                           levels = lev_scen)#Assign the levels 
+
+        gr_pred_dif_OSW$scen = factor(gr_pred_dif_OSW$scen,
+                           levels = lev_scen)#Assign the levels 
+
+    
+    # Entire range 
+        Den_ER_plot = ggplot(Coast)+
+          geom_sf()+
+          geom_tile(data = gr_pred_dif, aes(x=X, y=Y, ,fill = Est))+
+          facet_wrap(~scen, nrow = 1)+
+          scale_fill_gradient2(low = "#f7fcfd",
+                               mid = "#ccece6",
+                               high = "#00441b",
+                               na.value = "#00441b", 
+                               midpoint = quantile(gr_pred_dif$Est, 0.25),
+                               limits = c(0, quantile(gr_pred_dif$Est, 0.99)))+
+          # scale_fill_gradient2(low = "#0571b0",
+          #                      mid = "#f7f7f7",
+          #                      high = "#ca0020",
+          #                      limits = c(min(gr_pred_dif$Dif),
+          #                                 max(gr_pred_dif$Dif))) +
+          labs(x = "", y="") + 
+          theme_classic()+
+          xlim(min(gr_pred_dif$X),
+               max(gr_pred_dif$X))+
+          ylim(min(gr_pred_dif$Y),
+               max(gr_pred_dif$Y))+
+          geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .05)+
+          theme(axis.text = element_text(size = 5))
+
+        ## Different areas 
+          range_x = list()
+          for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+            range_x[[i]] = abs(gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(X) %>%
+                              summarise(min = min(X)) -
+                              gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(X) %>%
+                              summarise(max = max(X))) 
+    }
+  Max_range=max(unlist(range_x))
+  
+  range_y = list()
+          for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+            range_y[[i]] = abs(gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(Y) %>%
+                              summarise(max = max(Y)) -
+                              gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(Y) %>%
+                              summarise(min = min(Y))) 
+    }
+  Max_range_y=max(unlist(range_y))
+        
+        # Dif_plots = list()
+        # 
+        # for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+        #   w = gr_pred_dif_OSW[gr_pred_dif_OSW$OSW %in% unique(gr_pred_dif_OSW$OSW)[i],]
+        #   Dif_plots[[i]] = ggplot()+
+        #     geom_tile(data = w, aes(x=X, y=Y, ,fill = Dif))+
+        #     facet_nested(OSW~scen)+
+        #     scale_fill_gradient2(low = "#0571b0",
+        #                          mid = "#f7f7f7",
+        #                          high = "#ca0020",
+        #                          limits = c(min(gr_pred_dif$Dif),
+        #                                     max(gr_pred_dif$Dif))) +
+        #     theme_classic()+
+        #     labs(x = "", y="") +
+        #     xlim(mean(w$X) - Max_range/2,
+        #          mean(w$X) + Max_range/2)+
+        #     ylim(ifelse((median(w$Y) - Max_range_y/1.95)<min(w$Y), 
+        #                 (median(w$Y) - Max_range_y/1.95),
+        #                 min(w$Y)),
+        #          median(w$Y) + Max_range_y/1.95)+
+        #     geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .75)+
+        #     theme(axis.text = element_blank(),
+        #           axis.line = element_blank(),
+        #           axis.ticks = element_blank(),
+        #           axis.title = element_blank())
+        #   }
+    
+    return(list(Density_dif_ER = gr_pred_dif,
+                Density_dif_OSW = gr_pred_dif_OSW,
+                Dif_plot_ER = Den_ER_plot#,
+                #Dif_plot_OSW = Dif_plots
+                ))
+}
+
+saveRDS(Dens_plot_func, paste0(WD.1, "/Functions/Dens_plot_func.rds"))#Index function 
+
+Dens_plot_func2 = function(Dens_data = NA,
+                         #Dens_dif = NA,
+                        scen = NA,
+                        Proj_extent = NA,
+                        OSW_shp = NA,
+                        Coast = NA,
+                        lev_scen = NA, 
+                        Term.year = NA){
+  # List to be filled 
+    SP_dens = Dens_data
+    SP_dens_ER = Dens_data %>%
+      filter(group %in% "Entire region")
+    
+    group_dif_ER = list()
+    gr_group_xy <- list()
+    gr_group = list()
+    gr_pred_group = list()
+    group_dif = list()
+    group_list = list()
+    
+    #Grab points for plotting - entire region 
+    gr=st_bbox(SP_dens[SP_dens$scen=="All data",] %>%
+                 st_as_sf(coords = c("lon", "lat"),
+                          crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+      st_make_grid(cellsize=.5, what='centers')%>%
+      st_as_sf() %>%
+      st_intersection(st_as_sfc((Proj_extent)))
+    gr_xy <- st_coordinates(gr)
+
+    #Grab points for plotting - OSW areas 
+    for(i in 1:length(unique(OSW_shp$group))){ 
+    #Create a data frame for each OSW area
+      gr_group[[i]]= gr %>%
+        st_intersection(st_as_sfc(OSW_shp[OSW_shp$group==unique(OSW_shp$group)[i],]))
+      gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+    }
+    names(gr_group) = unique(OSW_shp$group)
+    names(gr_group_xy) = unique(OSW_shp$group)
+
+    
+    #Now calculate the density performance metrics 
+    sp_PM = SP_dens_ER %>%
+      filter(year == Term.year) %>%
+      select(lon, lat, group, year, est1, est2, scen) %>%
+      mutate(est = plogis(est1)*exp(est2)) %>%
+      select(lon, lat, group, year, est, scen) %>%
+
+      rename(X = lon,
+             Y = lat)
+
+    gr_pred_dif = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      pred_points <- x %>%
+      dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points,gr_xy,k=1)$nn.idx
+      gr_pred <- gr_xy %>% as_tibble() %>% mutate(Est=x$est[nns])
+      gr_pred$scen = x$scen[1]
+      return(gr_pred)
+      }))
+
+    gr_pred_dif_OSW = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+      scen_list = list()
+      for(i in 1:length(gr_group_xy)){
+        pred_points <- x %>%
+          dplyr::select(X,Y) %>% as.matrix()
+        nns <- nn2(pred_points,gr_group_xy[[i]],k=1)$nn.idx
+        gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Est=x$est[nns])
+        gr_pred$scen = x$scen[1]
+        gr_pred$OSW = names(gr_group_xy)[i]
+        scen_list[[i]] = gr_pred
+        }
+      return(bind_rows(scen_list))
+      }))
+    ## Plots 
+    
+        gr_pred_dif$scen = factor(gr_pred_dif$scen,
+                           levels = lev_scen)#Assign the levels 
+
+        gr_pred_dif_OSW$scen = factor(gr_pred_dif_OSW$scen,
+                           levels = lev_scen)#Assign the levels 
+
+    
+    # Entire range 
+        Den_ER_plot = ggplot(Coast)+
+          geom_sf()+
+          geom_tile(data = gr_pred_dif, aes(x=X, y=Y, ,fill = Est))+
+          facet_wrap(~scen, nrow = 1)+
+          scale_fill_gradient2(low = "#f7fcfd",
+                               mid = "#ccece6",
+                               high = "#00441b",
+                               na.value = "#00441b", 
+                               midpoint = quantile(gr_pred_dif$Est, 0.25),
+                               limits = c(0, quantile(gr_pred_dif$Est, 0.99)))+
+          # scale_fill_gradient2(low = "#0571b0",
+          #                      mid = "#f7f7f7",
+          #                      high = "#ca0020",
+          #                      limits = c(min(gr_pred_dif$Dif),
+          #                                 max(gr_pred_dif$Dif))) +
+          labs(x = "", y="") + 
+          theme_classic()+
+          xlim(min(gr_pred_dif$X),
+               max(gr_pred_dif$X))+
+          ylim(min(gr_pred_dif$Y),
+               max(gr_pred_dif$Y))+
+          geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .05)+
+          theme(axis.text = element_text(size = 5))
+
+        ## Different areas 
+          range_x = list()
+          for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+            range_x[[i]] = abs(gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(X) %>%
+                              summarise(min = min(X)) -
+                              gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(X) %>%
+                              summarise(max = max(X))) 
+    }
+  Max_range=max(unlist(range_x))
+  
+  range_y = list()
+          for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+            range_y[[i]] = abs(gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(Y) %>%
+                              summarise(max = max(Y)) -
+                              gr_pred_dif_OSW %>%
+                              filter(OSW == unique(OSW_shp$group)[i]) %>%
+                              select(Y) %>%
+                              summarise(min = min(Y))) 
+    }
+  Max_range_y=max(unlist(range_y))
+        
+        # Dif_plots = list()
+        # 
+        # for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+        #   w = gr_pred_dif_OSW[gr_pred_dif_OSW$OSW %in% unique(gr_pred_dif_OSW$OSW)[i],]
+        #   Dif_plots[[i]] = ggplot()+
+        #     geom_tile(data = w, aes(x=X, y=Y, ,fill = Dif))+
+        #     facet_nested(OSW~scen)+
+        #     scale_fill_gradient2(low = "#0571b0",
+        #                          mid = "#f7f7f7",
+        #                          high = "#ca0020",
+        #                          limits = c(min(gr_pred_dif$Dif),
+        #                                     max(gr_pred_dif$Dif))) +
+        #     theme_classic()+
+        #     labs(x = "", y="") +
+        #     xlim(mean(w$X) - Max_range/2,
+        #          mean(w$X) + Max_range/2)+
+        #     ylim(ifelse((median(w$Y) - Max_range_y/1.95)<min(w$Y), 
+        #                 (median(w$Y) - Max_range_y/1.95),
+        #                 min(w$Y)),
+        #          median(w$Y) + Max_range_y/1.95)+
+        #     geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .75)+
+        #     theme(axis.text = element_blank(),
+        #           axis.line = element_blank(),
+        #           axis.ticks = element_blank(),
+        #           axis.title = element_blank())
+        #   }
+    
+    return(list(Density_dif_ER = gr_pred_dif,
+                Density_dif_OSW = gr_pred_dif_OSW,
+                Dif_plot_ER = Den_ER_plot#,
+                #Dif_plot_OSW = Dif_plots
+                ))
+}
+
+saveRDS(Dens_plot_func2, paste0(WD.1, "/Functions/Dens_plot_func2.rds"))#Index function 
+
+```
+
+```{r Plotting function density directional function }
+
+Dens_Prc_Change_func.b = function(Dens_data = NA,
+                         Dens_dif = NA,
+                         #scen = NA,
+                         Proj_extent = NA,
+                         OSW_shp = NA,
+                         Coast = NA,
+                         lev_scen = NA, 
+                         Term.year = NA){
+  # List to be filled 
+  SP_dens = Dens_data
+  SP_dens_ER = Dens_data %>%
+    filter(group %in% "Entire region")
+  
+  group_dif_ER = list()
+  gr_group_xy <- list()
+  gr_group = list()
+  gr_pred_group = list()
+  group_dif = list()
+  group_list = list()
+  
+  #Grab points for plotting - entire region 
+  gr=st_bbox(SP_dens[SP_dens$scen=="All data",] %>%
+               st_as_sf(coords = c("lon", "lat"),
+                        crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+    st_make_grid(cellsize=.5, what='centers')%>%
+    st_as_sf() %>%
+    st_intersection(st_as_sfc((Proj_extent)))
+  gr_xy <- st_coordinates(gr)
+  
+  #Grab points for plotting - OSW areas 
+  for(i in 1:length(unique(OSW_shp$group))){ 
+    #Create a data frame for each OSW area
+    gr_group[[i]]= gr %>%
+      st_intersection(st_as_sfc(OSW_shp[OSW_shp$group==unique(OSW_shp$group)[i],]))
+    gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+  }
+  names(gr_group) = unique(OSW_shp$group)
+  names(gr_group_xy) = unique(OSW_shp$group)
+  
+  
+  #Now calculate the density performance metrics 
+  # sp_PM = Dens_dif %>%
+  #   filter(year == Term.year) %>%
+  #   mutate(Max_df = max(abs(Dif))) %>%
+  #   mutate(Dif = (Dif/Max_df)) %>%
+  #   group_by(scen, X, Y) %>%
+  #   summarise(Dif = mean(Dif)) %>%
+  #   select(X, Y, scen, Dif) %>%
+  #   ungroup()
+  sp_PM = Dens_dif %>%
+  #group_by(scen, X, Y) %>%
+  #summarise(Dif = mean(Dif)) %>% ungroup() %>%
+  filter(year == Term.year) %>%
+  #mutate(Max_df = max(abs(Dif))) %>%
+  #mutate(Dif = (Dif/Max_df)) %>%
+  group_by(scen, X, Y) %>%
+  summarise(Dif = mean(Dif)) %>%
+  select(X, Y, scen, Dif) %>%
+  ungroup()
+  # 
+  gr_pred_dif = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+    pred_points <- x %>%
+      dplyr::select(X,Y) %>% as.matrix()
+    nns <- nn2(pred_points,gr_xy,k=1)$nn.idx
+    gr_pred <- gr_xy %>% as_tibble() %>% mutate(Dif=x$Dif[nns])
+    gr_pred$scen = x$scen[1]
+    return(gr_pred)
+  }))
+  
+  gr_pred_dif_OSW = bind_rows(lapply(split(sp_PM, sp_PM$scen), function(x){
+    scen_list = list()
+    for(i in 1:length(gr_group_xy)){
+      pred_points <- x %>%
+        dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points,gr_group_xy[[i]],k=1)$nn.idx
+      gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Dif=x$Dif[nns])
+      gr_pred$scen = x$scen[1]
+      gr_pred$OSW = names(gr_group_xy)[i]
+      scen_list[[i]] = gr_pred
+    }
+    return(bind_rows(scen_list))
+  }))
+  ## Plots 
+  
+  gr_pred_dif$scen = factor(gr_pred_dif$scen,
+                            levels = lev_scen)#Assign the levels 
+  
+  gr_pred_dif_OSW$scen = factor(gr_pred_dif_OSW$scen,
+                                levels = lev_scen)#Assign the levels 
+  
+  
+  # Entire range 
+  Den_ER_plot = ggplot(Coast)+
+    geom_sf()+
+    geom_tile(data = gr_pred_dif, aes(x=X, y=Y, ,fill = Dif))+
+    facet_wrap(~scen)+
+    scale_fill_gradient2(low = "#0571b0",
+                         mid = "#f7f7f7",
+                         high = "#ca0020",
+                         limits = c(min(gr_pred_dif$Dif),
+                                    max(gr_pred_dif$Dif))) +
+    labs(x = "", y="") + 
+    theme_classic()+
+    xlim(min(gr_pred_dif$X),
+         max(gr_pred_dif$X))+
+    ylim(min(gr_pred_dif$Y),
+         max(gr_pred_dif$Y))+
+    geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .1)+
+    theme(axis.text = element_text(size = 5))
+  
+  ## Different areas 
+  range_x = list()
+  for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+    range_x[[i]] = abs(gr_pred_dif_OSW %>%
+                         filter(OSW == unique(OSW_shp$group)[i]) %>%
+                         select(X) %>%
+                         summarise(min = min(X)) -
+                         gr_pred_dif_OSW %>%
+                         filter(OSW == unique(OSW_shp$group)[i]) %>%
+                         select(X) %>%
+                         summarise(max = max(X))) 
+  }
+  Max_range=max(unlist(range_x))
+  
+  range_y = list()
+  for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+    range_y[[i]] = abs(gr_pred_dif_OSW %>%
+                         filter(OSW == unique(OSW_shp$group)[i]) %>%
+                         select(Y) %>%
+                         summarise(max = max(Y)) -
+                         gr_pred_dif_OSW %>%
+                         filter(OSW == unique(OSW_shp$group)[i]) %>%
+                         select(Y) %>%
+                         summarise(min = min(Y))) 
+  }
+  Max_range_y=max(unlist(range_y))
+  
+  Dif_plots = list()
+  
+  for(i in 1:length(unique(gr_pred_dif_OSW$OSW))){
+    w = gr_pred_dif_OSW[gr_pred_dif_OSW$OSW %in% unique(gr_pred_dif_OSW$OSW)[i],]
+    Dif_plots[[i]] = ggplot()+
+      geom_tile(data = w, aes(x=X, y=Y, ,fill = Dif))+
+      facet_nested(OSW~scen)+
+      scale_fill_gradient2(low = "#0571b0",
+                           mid = "#f7f7f7",
+                           high = "#ca0020",
+                           limits = c(min(gr_pred_dif$Dif),
+                                      max(gr_pred_dif$Dif))) +
+      theme_classic()+
+      labs(x = "", y="") +
+      xlim(mean(w$X) - Max_range/2,
+           mean(w$X) + Max_range/2)+
+      ylim(ifelse((median(w$Y) - Max_range_y/1.95)<min(w$Y), 
+                  (median(w$Y) - Max_range_y/1.95),
+                  min(w$Y)),
+           median(w$Y) + Max_range_y/1.95)+
+      geom_sf(data = OSW_shp, fill = 'transparent', colour = 'black', lwd = .75)+
+      theme(axis.text = element_blank(),
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_blank())
+  }
+ 
+  dif_avg = gr_pred_dif_OSW %>%
+    group_by(scen, OSW) %>%
+    summarise(Avg = mean(Dif))
+
+  return(list(Density_dif_ER = gr_pred_dif,
+              Density_dif_OSW = gr_pred_dif_OSW,
+              Dif_plot_ER = Den_ER_plot,
+              Dif_plot_OSW = Dif_plots,
+              Dif = dif_avg))
+}
+
+saveRDS(Dens_Prc_Change_func.b, paste0(WD.1, "/Functions/Dens_perc_change_func_b.rds"))#Index function 
+
+```
+

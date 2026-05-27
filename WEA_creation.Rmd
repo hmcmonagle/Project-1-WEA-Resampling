@@ -1,0 +1,1075 @@
+---
+title: "OSW and Projection area designation"
+author: "Kaitlyn O'Brien"
+date: "2024-11-21"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, dpi = 300, message = FALSE, cache.lazy = F)
+```
+
+```{r load packages, results = 'hide', message = FALSE}
+library("ggplot2")
+library("raster")
+library("terra")
+library("tidyverse")
+library("RANN")
+library("sf")
+library("rnaturalearth")
+library("devtools")
+library("sdmTMB")
+library("ggpubr")
+library("patchwork")
+library("ggh4x")
+library("gridExtra")
+library("dplyr")
+library("sdmTMB")
+library("nwfscSurvey")
+library("eply")
+library("patchwork")
+library("sdmTMBextra")
+library("units")
+library("RANN")
+library("scales")
+library("ggh4x")
+library("pbapply")
+library("cowplot")
+library("officedown")
+
+WD.1=("C:/Users/kaitlyn.o'brien/Documents/GitHub/Offshore_Wind_PJ1/Data")#Update this file to your file location
+```
+
+# Purpose of the document 
+
+The purpose of this document is to create the different WEA scenarios, gather the projection data frame for the West Coast Groundfish Bottom Trawl Survey, and the coastline information.
+
+WEAs will include 3 different scenarios. The first scenario includes the two leased WEAs in california (Morro Bay and Brookings) as well as the two Oregon call areas that were originally going up for auction in October of 2024 (Brooking and Coos Bay). While these two Oregon areas did not actually go to lease, this spatial scenario was considered the smallest and realistic. The second scenario includes these original 4 as well as five other considered areas identified in California (Del Norte, Humboldt 2, Humboldt 3, Mendocino 2, and Monterey - Mendocino 1 was not included because it does not overlap with the survey). The last scenario is the most extreme, but also based in reality. This includes the two large Oregon areas that were sized down to the original potential lease areas (large Coos Bay and large Brookings) and the large areas in California that were the based on the areas of interest in scenario 2 (Del Norte Oval, Humboldt Oval, Morro Bay oval).
+
+
+### Projection data frame
+
+The projection area considered was largely left alone with the exception of removing a few grid cells that are offshore in the southern district. These areas were not sampled in the 2003-2023 time period, and also have a major impact on previous analyses. For these reasons I removed these 7 grid cells from the projection. 
+
+One important variable to include in both the projection dataset and the OSW shapefile is "group". This is the separating variable within the sdmTMB function written, so be sure to label the projection dataset "group" the "Entire region" and each individual OSW shapefile polygons as individual groups.
+
+```{r Projection_dataset, message=FALSE, fig.height=3, fig.width=5, fig.cap= "\\label{fig::R} Spatial extent of the Projection data frame including A) the removed areas - red - and B) the spatial extent with the area removed."}
+#### Coast outline - for plotting 
+coast_outline <- ne_states(country = 'United States of America', returnclass = 'sf') %>%
+  filter(gn_name %in% c('California','Oregon','Washington','Nevada','Idaho', "Montana")) %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")#make sure to convernt to UTM 
+
+####Projection shapefile and dataframe - for predictions and plotting
+Projection_extent = read_sf(paste0(WD.1,"/Shapefile/WCGBTS_Grid_v2008/WCGBTS_Grid_v2008_GCSWGS84.shp")) %>%
+  st_as_sf(coords = c("longitude", "latitude")) %>%
+  st_transform(crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))
+Projection_extent$Area_km2 = Projection_extent$Area_sqm*0.000001#grab the area for each cell - change from m^2 to km^2
+saveRDS(Projection_extent, paste0(WD.1, "/Projection_shapefile_WCGBTWS.rds"))
+
+
+Proj_df = as.data.frame(Projection_extent)
+Lat_lon = data.frame(st_coordinates(Projection_extent)) %>%
+  group_by(L2) %>%
+  filter(row_number()==1)
+
+Proj_df$lon = Lat_lon$X
+Proj_df$lat = Lat_lon$Y
+Proj_df$depth_m = Proj_df$Avg_Dep_m
+names(Proj_df) = tolower(names(Proj_df))
+#Previous runs have shown that one set of area was never sampled in the south and causes issues for predictions. removing this area fromt he projection data frame. 
+Full_Area=ggplot()+
+  geom_point(data = Proj_df[!Proj_df$centroidid %in% 
+                              Proj_df[Proj_df$lat < 3664 & Proj_df$lon < 696,]$centroidid,],
+       aes(x = lon, y = lat),size = .1)+
+  geom_point(data = Proj_df[Proj_df$centroidid %in% 
+                              Proj_df[Proj_df$lat < 3664 & Proj_df$lon < 696,]$centroidid,],
+       aes(x = lon, y = lat),size = .1, colour = "red")+
+  geom_sf(data= coast_outline)+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+  theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+Proj_df = Proj_df[!Proj_df$centroidid %in% 
+                    Proj_df[Proj_df$lat < 3664 & Proj_df$lon < 696,]$centroidid,]
+Rmoved_Area=ggplot()+
+  geom_point(data = Proj_df,
+       aes(x = lon, y = lat),size = .1)+
+  geom_sf(data= coast_outline)+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+ggarrange(Full_Area, Rmoved_Area,ncol = 2, labels = c("A)", "B)"))
+
+```
+
+```{r Saving_Projection_dataFrame}
+Proj_df$group = "Entire region" #Name the group entire region - group is an important seperation variable within the sdmTMB function
+
+saveRDS(Proj_df, paste0(WD.1, "/Projection_Dataset_WCGBTWS.rds"))
+
+```
+
+This projection data frame is CONSISTENT across all spatial and temporal scenarios. 
+
+### OSW areas 
+
+#### Spatial Scenario 1 - Small but realistic options
+
+Here I am setting up the OSW areas for future analysis. These are the four "current" OSW WEA. 
+
+```{r OSW current areas }
+#### OSW proposed areas  - in this instance two different shapefiles for the different states, merge polygons together
+OSW_CA = st_read(paste0(WD.1,"/Shapefile/Offshore_Wind_Energy_Lease_Outlines/Wind_Lease_Outlines.shp"), promote_to_multi=F) %>% #make sure this comes in as polygon instead of multipolygon
+  st_as_sf()%>%
+  filter(STATE %in% c('California',"CA")) %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")
+OSW_CA$Group = with(OSW_CA,ifelse(PROTRACTIO == "NK10-07", "Humboldt", "Morro"))#Create 2 groupings - northern and central California
+
+OSW_OR = st_read(paste0(WD.1,"/Shapefile/Oregon_Lease_Areas_0/Oregon_Lease_Areas_2024_08_21.shp"), promote_to_multi=F) %>% 
+  st_as_sf() %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")
+OSW_OR$Group = with(OSW_OR,ifelse(Lease_ID=="B", "Brookings", "Coos Bay"))
+
+names(OSW_CA) = tolower(names(OSW_CA))#convert to lower case 
+names(OSW_OR) = tolower(names(OSW_OR))#convert to lower case 
+
+OSW_current=dplyr::bind_rows(list(OSW_OR,OSW_CA))#Combine the two different OSW areas into one polygon object for further analysis 
+
+
+```
+
+
+```{r save_Spatial_Scenario_1}
+saveRDS(OSW_current, paste0(WD.1, "/OSW_current.rds"))
+
+```
+
+
+#### Spatial Scenario 2 - Larger WEA areas in California 
+
+Now I am setting up and processing the 5 additional WEAs in California for spatial scenario 2. 
+
+These areas are much bigger, but may not actually overlap with the surveyed region. 
+
+```{r OSWFutureOptions}
+#### OSW proposed areas  - in this instance two different shapefiles for the different states, merge polygons together
+#C:\Users\kaitlyn.o'brien\Documents\GitHub\Offshore_Wind_PJ1\Data\Shapefile\MasterAG_AG_Aggregated_SSC
+OSW_Fut1 = st_read(paste0(WD.1,"/Shapefile/MasterAG_AG_Aggregated_SSC/MasterAG_Aggregated_SSC_1.shp"), promote_to_multi=F) %>% #make sure this comes in as polygon instead of multipolygon
+  st_as_sf()%>%
+  #filter(STATE %in% c('California',"CA")) %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")
+
+OSW_Fut2 = st_read(paste0(WD.1,"/Shapefile/MasterAG_Aggregated_NS_Merge/MasterAG_Aggregated_NS_Merge_Export.shp"), promote_to_multi=F) %>% #make sure this comes in as polygon instead of multipolygon
+  st_as_sf()%>%
+  #filter(STATE %in% c('California',"CA")) %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")
+
+ggplot()+
+  geom_sf(data = coast_outline) + 
+  geom_sf(data = OSW_Fut1, 
+          colour = "darkgreen", fill = "darkgreen")+ 
+  geom_sf(data = OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[1],], 
+          colour = "darkblue", fill = "darkblue") +
+  geom_sf(data = OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[2],], 
+          colour = "darkred", fill = "darkred") +
+  geom_sf(data = OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[3],], 
+          colour = "orange", fill = "orange")+
+  geom_sf(data = OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[4],], 
+          colour = "purple", fill = "purple")+
+  geom_sf(data = OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[5],], 
+          colour = "lightblue", fill = "lightblue")
+
+OSW_Fut1$group = NA
+OSW_Fut2$group = NA
+OSW_Fut1$group = "Monterey"
+OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[1],]$group = "Del Norte"
+OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[2],]$group = "Humboldt2"
+OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[3],]$group = "Humboldt3"
+OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[4],]$group = "Mendocino1"
+OSW_Fut2[OSW_Fut2$CA_Area_Na==unique(OSW_Fut2$CA_Area_Na)[5],]$group = "Mendocino2"
+
+```
+
+```{r Scenario2_save}
+OSW_Fut=dplyr::bind_rows(list(OSW_Fut1, OSW_Fut2))
+
+saveRDS(OSW_Fut, paste0(WD.1, "/OSW_Fut.rds"))
+```
+
+However, for these locations notice that how each polygon has multiple data grid cells. While this is important for the actual analysis, it makes plotting difficult. For that reason, I created polygons of just the perimeter for plotting purposes. THESE POLYGONS WILL NOT BE UTILIZED FOR MODELS BUT INSTEAD FOR PLOTTING PURPOSES  
+
+``` {r, OutlineforMonterey}
+## Starting with Monterey
+unique(OSW_Fut1$PROT_NUM)
+summary(st_cast(OSW_Fut %>%
+          filter(group %in% "Monterey"), 'MULTILINESTRING'))
+ggplot(data = OSW_Fut %>%
+          filter(group %in% "Monterey") %>%
+  st_buffer(dist = .1)
+) +
+  geom_sf(aes(colour = PROT_NUM )) 
+
+ggplot(data = st_as_sf(as.tibble(st_coordinates(OSW_Fut %>%
+  filter(group %in% "Monterey"))) %>%
+  mutate(ID = paste0(round(X,5),"_", round(Y,5))) %>%
+  filter(duplicated(.[["ID"]])),
+  coords = c("X","Y"), crs = "+proj=utm +zone=10 +datum=WGS84 +units=km")) + 
+  geom_sf(alpha = 0.1)
+## Outside true 
+All_Monterey = as.tibble(st_coordinates(OSW_Fut %>%
+                                         filter(group %in% "Monterey"))) %>%
+                mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+                  distinct()
+Inside_Monterey = as.tibble(st_coordinates(OSW_Fut %>%
+                                      filter(group %in% "Monterey"))) %>%
+             mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+             filter(duplicated(.[["ID"]]))%>%
+                  distinct()
+df1 = All_Monterey[!All_Monterey$ID %in% Inside_Monterey$ID,c("X","Y")]
+#For monterety, given all the strange geometry it was best to use a locator option
+df1a = df1[df1$Y>3991,]
+
+df1b = df1[df1$Y<3991,]
+
+plot(st_geometry(OSW_Fut %>% filter(group %in% "Monterey")))+
+  points(Y~X, data = df1a, add=T, col = "red", pch = 16, cex= .9) +
+  points(Y~X, data = df1b, add=T, col = "blue", pch = 16, cex= .9) 
+
+lws_mont = locator()
+
+LWS_mont = data.frame(X = lws_mont$x,
+                      Y = lws_mont$y)
+Mont_l = st_as_sf(rbind(LWS_mont, LWS_mont[1,]), coords = c("X","Y"), crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+            summarise(geometry= st_combine(geometry))%>%
+            st_cast("POLYGON")
+Mont_l$group = "Monterey"
+Nws_mont = locator()
+
+NWS_mont = data.frame(X = Nws_mont$x,
+                      Y = Nws_mont$y)
+
+Mont_u = st_as_sf(rbind(NWS_mont, NWS_mont[1,]), coords = c("X","Y"), crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+            summarise(geometry= st_combine(geometry))%>%
+            st_cast("POLYGON")
+Mont_u$group = "Monterey"
+Mont=dplyr::bind_rows(list(Mont_l,Mont_u))
+ggplot()+
+  geom_sf(data = OSW_Fut %>% filter(group %in% "Monterey"))+
+  geom_sf(data = Mont, fill = "transparent")
+
+
+```
+
+Now we will look at the two additional Humboldt areas. 
+
+```{r, OutlineforHumboldt2}
+
+humboldt.2=rbind(as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Humboldt2"))) %>%
+          mutate(X1 = as.character(round(X,8))) %>%
+          group_by(X1) %>%
+          summarise(Y = min(Y)) %>%
+         mutate(X = as.numeric(X1))%>%
+        select(X, Y) %>%
+          arrange(desc(X)),
+      as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Humboldt2"))) %>%
+          mutate(X1 = as.character(round(X,8))) %>%
+          group_by(X1) %>%
+          summarise(Y = max(Y)) %>%
+         mutate(X = as.numeric(X1)) %>%
+        select(X, Y)%>%
+          arrange((X)))
+humboldt.2 = data.frame(rbind(humboldt.2, humboldt.2[1,]))
+
+ggplot(data = st_cast(OSW_Fut2 %>%
+          filter(group %in% "Humboldt 2"), 'MULTILINESTRING')
+) +
+  geom_sf() + 
+  geom_point(data = as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Humboldt2"))) %>%
+          mutate(X1 = as.character(round(X,8))) %>%
+          group_by(X1) %>%
+          summarise(y_min = min(Y),
+                 y_max = max(Y)) %>%
+         mutate(X = as.numeric(X1)), aes(x = X, y = y_min)) + 
+  geom_point(data = as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Humboldt2"))) %>%
+          mutate(X1 = as.character(round(X,8))) %>%
+          group_by(X1) %>%
+          summarise(y_min = min(Y),
+                 y_max = max(Y)) %>%
+         mutate(X = as.numeric(X1)), aes(x = X, y = y_max),
+         colour = "red")+
+  geom_sf(data = humboldt.2%>%
+  st_as_sf(coords = c("X", "Y"),
+           crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON"), fill = "transparent", colour = "blue")
+
+Humboldt2 = humboldt.2%>%
+  st_as_sf(coords = c("X", "Y"),
+           crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON")
+Humboldt2$group = "Humboldt2"
+
+```
+
+Now humboldt 3
+
+```{r, outlineforhumboldt3}
+ggplot(data = OSW_Fut2 %>%
+          filter(group %in% "Humboldt3") 
+) +
+  geom_sf() 
+
+All_Humboldt3 = as.tibble(st_coordinates(OSW_Fut2 %>%
+                                         filter(group %in% "Humboldt3"))) %>%
+                mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+                  distinct()
+Inside_Humboldt3 = as.tibble(st_coordinates(OSW_Fut2 %>%
+                                      filter(group %in% "Humboldt3"))) %>%
+             mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+             filter(duplicated(.[["ID"]]))%>%
+                  distinct()
+df_H3 = All_Humboldt3[!All_Humboldt3$ID %in% Inside_Humboldt3$ID,c("X","Y")]
+
+ggplot(data = OSW_Fut2 %>%
+          filter(group %in% "Humboldt3") 
+) +
+  geom_sf() +
+  geom_point(data = df_H3, aes(X, Y))
+
+plot(st_geometry(OSW_Fut2 %>% filter(group %in% "Humboldt3")))+
+  points(Y~X, data = df_H3, add=T, col = "red", pch = 16, cex= .9)
+
+lws_Hum3 = locator()
+
+LWS_Hum3 = data.frame(X = lws_Hum3$x,
+                      Y = lws_Hum3$y)
+
+Hum3 = st_as_sf(rbind(LWS_Hum3, LWS_Hum3[1,]), coords = c("X","Y"), crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+            summarise(geometry= st_combine(geometry))%>%
+            st_cast("POLYGON")
+Hum3$group = "Humboldt3"
+
+ggplot()+
+  geom_sf(data = OSW_Fut2 %>% filter(group %in% "Humboldt3"))+
+  geom_sf(data = Hum3, fill = "transparent")
+
+
+```
+
+And Del Norte
+
+```{r, outline forDelnorte}
+ggplot(data = OSW_Fut2 %>%
+          filter(group %in% "Del Norte") 
+) +
+  geom_sf() 
+
+
+DelN=rbind(as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Del Norte"))) %>%
+          mutate(Y1 = as.character(round(Y,8))) %>%
+          group_by(Y1) %>%
+          summarise(X = min(X)) %>%
+         mutate(Y = as.numeric(Y1))%>%
+        select(X, Y) %>%
+          arrange(desc(Y)),
+      as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Del Norte"))) %>%
+          mutate(Y1 = as.character(round(Y,8))) %>%
+          group_by(Y1) %>%
+          summarise(X = max(X)) %>%
+         mutate(Y = as.numeric(Y1)) %>%
+        select(X, Y)%>%
+          arrange((Y)))
+DelN = data.frame(rbind(DelN, DelN[1,]))
+
+ggplot(data = st_cast(OSW_Fut2 %>%
+          filter(group %in% "Del Norte"), 'MULTILINESTRING')
+) +
+  geom_sf() + 
+  geom_point(data = as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Del Norte"))) %>%
+          mutate(Y1 = as.character(round(Y,8))) %>%
+          group_by(Y1) %>%
+          summarise(X = min(X)) %>%
+         mutate(Y = as.numeric(Y1))%>%
+        select(X, Y) %>%
+          arrange(desc(Y)), aes(x = X, y = Y)) + 
+  geom_point(data = as.data.frame(st_coordinates(OSW_Fut2 %>%
+          filter(group %in% "Del Norte"))) %>%
+          mutate(Y1 = as.character(round(Y,8))) %>%
+          group_by(Y1) %>%
+          summarise(X = max(X)) %>%
+         mutate(Y = as.numeric(Y1)) %>%
+        select(X, Y)%>%
+          arrange((Y)), aes(x = X, y = Y),
+         colour = "red")+
+  geom_sf(data = DelN%>%
+  st_as_sf(coords = c("X", "Y"),
+           crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON"), fill = "transparent", colour = "blue")
+
+DelNorte = DelN%>%
+  st_as_sf(coords = c("X", "Y"),
+           crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON")
+DelNorte$group = "Del Norte"
+```
+
+Finally Mendocino
+
+```{r, outlineforMendocino}
+ggplot(data = OSW_Fut2 %>%
+          filter(group %in% "Mendocino2") 
+) +
+  geom_sf() 
+#Go with locator option 
+
+All_Mendocino2 = as.tibble(st_coordinates(OSW_Fut2 %>%
+                                         filter(group %in% "Mendocino2"))) %>%
+                mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+                  distinct()
+Inside_Mendocino2 = as.tibble(st_coordinates(OSW_Fut2 %>%
+                                      filter(group %in% "Mendocino2"))) %>%
+             mutate(ID = paste0(round(X,8),"_", round(Y,8))) %>%
+                  select(X, Y, ID) %>%
+             filter(duplicated(.[["ID"]]))%>%
+                  distinct()
+df_M3 = All_Mendocino2[!All_Mendocino2$ID %in% Inside_Mendocino2$ID,c("X","Y")]
+
+plot(st_geometry(OSW_Fut2 %>% filter(group %in% "Mendocino2")))+
+  points(Y~X, data = df_M3, add=T, col = "red", pch = 16, cex= .9)
+
+lws_Mend2 = locator()
+
+LWS_Mend2 = data.frame(X = lws_Mend2$x,
+                      Y = lws_Mend2$y)
+
+Mend2 = st_as_sf(rbind(LWS_Mend2, LWS_Mend2[1,]), coords = c("X","Y"), crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+            summarise(geometry= st_combine(geometry))%>%
+            st_cast("POLYGON")
+Mend2$group = "Mendocino2"
+
+ggplot()+
+  geom_sf(data = OSW_Fut2 %>% filter(group %in% "Mendocino2"))+
+  geom_sf(data = Mend2, fill = "transparent")
+
+```
+
+```{r, combinetheoutlinestogether}
+
+OSW_Large=dplyr::bind_rows(list(Mont, Hum3, DelNorte, Humboldt2, Mend2))
+
+ggplot()+
+  geom_sf(data = OSW_Fut2, aes(colour = group, fill = group))+
+    geom_sf(data = OSW_Fut1, aes(colour = group, fill = group))+
+  geom_sf(data = OSW_Large, fill = "transparent", colour = "black") + 
+  geom_sf(data=coast_outline)+
+  theme_classic()
+
+saveRDS(OSW_Large, paste0(WD.1, "/OSW_Fut_outline.rds"))
+
+```
+
+```{r SpatialScenario2plot}
+
+OSW_Large = readRDS(paste0(WD.1, "/OSW_Fut_outline.rds"))
+
+```
+
+#### Spatial Scenario 3 - Largest possible area
+
+Now we have extended to the ovals that were designed for the creating the 5 newer WEA options as well as the two larger considered Oregon areas. 
+
+Starting with Oregon. This information was created by gathering data points from the maps on website https://geohub.oregon.gov/apps/oregon-geo::oregon-offshore-wind-mapping-tool/explore
+
+```{r largeOregonAreas}
+### Large Coos Bay
+X = c(-125.1094, -125.0929, -125.0954, -124.6803, -124.6770,-124.6784, -124.6762, 
+      -125.0565, -125.0589, -125.0877, -125.0923, -125.1085)
+Y = c(43.9070,43.9070, 43.9498, 43.9566, 43.8380, 43.8380, 43.7310, 43.7248, 
+      43.7771,43.7766, 43.8846, 43.8843)
+
+Large_Coos=data.frame(X = X,
+                      Y = Y)
+### Large Brookings 
+X_B = c(-124.7664, -124.7072, -124.7008, -124.6872, -124.6855, -124.6719, 
+        -124.6713, -124.6554, -124.6548, -124.6413, -124.6401, -124.6244, 
+        -124.6227, -124.6091, -124.6085, -124.5928, -124.5919, -124.5786, 
+        -124.5783, -124.7251, -124.7256, -125.0869, -125.0872, -125.0715,
+        -125.0718, -125.0580, -125.0588, -125.0453, -125.0461, -125.0303, 
+        -125.0306, -125.0010, -125.0015, -124.9878, -124.9883, -124.9725,
+        -124.9748, -124.9906, -124.9911, -125.0050, -125.0069, -124.9935,
+        -124.9941, -124.9645, -124.9648, -124.9515, -124.9516, -124.8632, 
+        -124.8635, -124.8499, -124.8501, -124.8342, -124.8348, -124.8213,
+        -124.8215, -124.8078, -124.8084, -124.7925, -124.7932, -124.7797,
+        -124.7801, -124.7642, -124.7653, -124.8107, -124.8113, -124.7820,
+        -124.7820, -124.7662)
+Y_B = c(42.4857, 42.4866, 42.2492, 42.2494, 42.1843, 42.1844, 42.1631, 42.1632, 
+        42.1418, 42.1420, 42.0992, 42.0994, 42.0343, 42.0345, 42.0131, 42.0133,
+        41.9920, 41.9921, 41.9803, 41.9783, 41.9890, 41.9830, 41.9946, 41.9950,
+        42.0056, 42.0059, 42.0273, 42.0275, 42.0489, 42.0492, 42.0599, 42.0605,
+        42.0711, 42.0713, 42.0830, 42.0832, 42.1572, 42.1570, 42.1783, 42.1781, 
+        42.2443, 42.2445, 42.2659, 42.2664, 42.2771, 42.2773, 42.2880, 42.2895, 
+        42.3012, 42.3014, 42.3121, 42.3124, 42.3338, 42.3341, 42.3447, 42.3449,
+        42.3663, 42.3666, 42.3880, 42.3882, 42.4106, 42.4108, 42.4418, 42.4412,
+        42.4636, 42.4641, 42.4748, 42.4750)
+Large_Brook=data.frame(X = X_B,
+                      Y = Y_B)
+
+
+Large_Or=sp::SpatialPolygons(list(sp::Polygons(list(sp::Polygon(cbind(rbind(Large_Brook,Large_Brook[1,])[,1],
+                                                             rbind(Large_Brook,Large_Brook[1,])[,2]))), ID = "Brookings"),
+                               sp::Polygons(list(sp::Polygon(cbind(rbind(Large_Coos,Large_Coos[1,])[,1],
+                                                                   rbind(Large_Coos,Large_Coos[1,])[,2]))), ID = "Coos Bay"))) 
+proj4string(Large_Or) = CRS("+proj=longlat + datum=WGS84 + no_defs")  
+  
+Large_Or = Large_Or %>%
+  st_as_sf() %>% 
+  mutate(group = c("Brookings_Large", "Coos Bay_Large")) %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") 
+
+```
+
+```{r LargeOvalAreas}
+
+OSW_Ovals = st_read(paste0(WD.1,"/Shapefile/SeaSpace_2_bigOvals/SeaSpace_2_big_Ovals.shp"), promote_to_multi=F) %>% 
+  st_as_sf() %>%
+  st_transform(crs = "+proj=utm +zone=10 +datum=WGS84 +units=km") %>%
+  mutate(group = c("Del Norte Oval", "Humboldt Oval", "Morro Bay Oval")) 
+
+
+```
+
+```{r save_scenario3}
+
+OSW_Scen3=dplyr::bind_rows(list(Large_Or, OSW_Ovals %>% st_zm()))
+
+saveRDS(OSW_Scen3, paste0(WD.1, "/OSW_Scen_3.rds"))
+
+```
+
+## Create plot for Diagram 1 of the different types of proposed WEAs and their titles 
+
+For the manuscript we need a diagram of the different spatial scenarios that 1) designates the different types of WEAs into four categories and 2) gives names (or abbreviations) to the different WEAs for when they are called upon in the paper
+
+
+```{r PlotsForSpatialScenario, fig.height=4.25, fig.width=5.95, fig.cap= "\\label{fig::R} Spatial extent of considered WEAs for A) spatial sceanrio 1, B) spatial scenario 2, and C) spatial scenario 3. Different colors denote the different groupings for WEAs."}
+#Read in the data 
+OSW_current = readRDS(paste0(WD.1, "/OSW_current.rds"))
+OSW_Large = readRDS(paste0(WD.1, "/OSW_Fut_outline.rds"))
+OSW_Scen3 = readRDS(paste0(WD.1, "/OSW_Scen_3.rds"))
+gc()
+# Specify the colors for the different WEA designations 
+
+#"#D55E00" - > Leased WEAs
+#"#009E73" - > CA Sea Space AOIs
+#"#0072B2" - > CA Suitable Sea Space
+#"#CC79A7" - > Oregon WEAs
+
+Colour_opt = c("Leased WEAs" ="#CC79A7" ,
+               "Designated WEAs" = "#D55E00",
+               "CA Sea Space AOIs" = "#009E73",
+               "CA Suitable Sea Space" = "#0072B2",
+               "OR Call Areas" = "#E69F00")
+
+
+OSW_current = OSW_current %>% mutate(WEA_t = ifelse(group %in% "Humboldt", "Leased WEAs",
+                                      ifelse(group %in% "Brookings", "Designated WEAs",
+                                             ifelse(group %in% "Coos Bay", "Designated WEAs",
+                                                    ifelse(group %in% "Morro", "Leased WEAs",
+                                                           ifelse(group %in% "Del Norte", "CA Suitable Sea Space",
+                                                                  ifelse(group %in% "Humboldt2", "CA Suitable Sea Space",
+                                                                         ifelse(group %in% "Humboldt3", "CA Suitable Sea Space",
+                                                                                ifelse(group %in% "Mendocino2", "CA Suitable Sea Space",
+                                                                                       ifelse(group %in% "Monterey","CA Suitable Sea Space",
+                                                                                              ifelse(group %in% "Brookings_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "CA Sea Space AOIs", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "CA Sea Space AOIs", "CA Sea Space AOIs"))))))))))))),
+                                     group_3 = ifelse(group %in% "Humboldt", "Hm ",
+                                      ifelse(group %in% "Brookings", "Br ",
+                                             ifelse(group %in% "Coos Bay", "Cb ",
+                                                    ifelse(group %in% "Morro", "Mb ",
+                                                           ifelse(group %in% "Del Norte", "Dn ",
+                                                                  ifelse(group %in% "Humboldt2", "Hm2",
+                                                                         ifelse(group %in% "Humboldt3", "Hm3",
+                                                                                ifelse(group %in% "Mendocino2", "Md ",
+                                                                                       ifelse(group %in% "Monterey","Mr ",
+                                                                                              ifelse(group %in% "Brookings_Large", "BrL",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "CbL",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "DnO", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "HmO", "MbO"))))))))))))))
+
+OSW_Large = OSW_Large %>% mutate(WEA_t = ifelse(group %in% "Humboldt", "Leased WEAs",
+                                      ifelse(group %in% "Brookings", "Designated WEAs",
+                                             ifelse(group %in% "Coos Bay", "Designated WEAs",
+                                                    ifelse(group %in% "Morro", "Leased WEAs",
+                                                           ifelse(group %in% "Del Norte", "CA Suitable Sea Space",
+                                                                  ifelse(group %in% "Humboldt2", "CA Suitable Sea Space",
+                                                                         ifelse(group %in% "Humboldt3", "CA Suitable Sea Space",
+                                                                                ifelse(group %in% "Mendocino2", "CA Suitable Sea Space",
+                                                                                       ifelse(group %in% "Monterey","CA Suitable Sea Space",
+                                                                                              ifelse(group %in% "Brookings_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "CA Sea Space AOIs", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "CA Sea Space AOIs", "CA Sea Space AOIs"))))))))))))),
+                                     group_3 = ifelse(group %in% "Humboldt", "Hm ",
+                                      ifelse(group %in% "Brookings", "Br ",
+                                             ifelse(group %in% "Coos Bay", "Cb ",
+                                                    ifelse(group %in% "Morro", "Mb ",
+                                                           ifelse(group %in% "Del Norte", "Dn ",
+                                                                  ifelse(group %in% "Humboldt2", "Hm2",
+                                                                         ifelse(group %in% "Humboldt3", "Hm3",
+                                                                                ifelse(group %in% "Mendocino2", "Md ",
+                                                                                       ifelse(group %in% "Monterey","Mr ",
+                                                                                              ifelse(group %in% "Brookings_Large", "BrL",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "CbL",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "DnO", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "HmO", "MbO"))))))))))))))
+
+OSW_Scen3 = OSW_Scen3 %>% mutate(WEA_t = ifelse(group %in% "Humboldt", "Leased WEAs",
+                                      ifelse(group %in% "Brookings", "Designated WEAs",
+                                             ifelse(group %in% "Coos Bay", "Designated WEAs",
+                                                    ifelse(group %in% "Morro", "Leased WEAs",
+                                                           ifelse(group %in% "Del Norte", "CA Suitable Sea Space",
+                                                                  ifelse(group %in% "Humboldt2", "CA Suitable Sea Space",
+                                                                         ifelse(group %in% "Humboldt3", "CA Suitable Sea Space",
+                                                                                ifelse(group %in% "Mendocino2", "CA Suitable Sea Space",
+                                                                                       ifelse(group %in% "Monterey","CA Suitable Sea Space",
+                                                                                              ifelse(group %in% "Brookings_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "OR Call Areas",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "CA Sea Space AOIs", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "CA Sea Space AOIs", "CA Sea Space AOIs"))))))))))))),
+                                     group_3 = ifelse(group %in% "Humboldt", "Hm ",
+                                      ifelse(group %in% "Brookings", "Br ",
+                                             ifelse(group %in% "Coos Bay", "Cb ",
+                                                    ifelse(group %in% "Morro", "Mb ",
+                                                           ifelse(group %in% "Del Norte", "Dn ",
+                                                                  ifelse(group %in% "Humboldt2", "Hm2",
+                                                                         ifelse(group %in% "Humboldt3", "Hm3",
+                                                                                ifelse(group %in% "Mendocino2", "Md ",
+                                                                                       ifelse(group %in% "Monterey","Mr ",
+                                                                                              ifelse(group %in% "Brookings_Large", "BrL",
+                                                                                                     ifelse(group %in% "Coos Bay_Large", "CbL",
+                                                                                                     ifelse(group %in% "Del Norte Oval", "DnO", 
+                                                                                                            ifelse(group %in% "Humboldt Oval", "HmO", "MbO"))))))))))))))
+
+Proj_df %>% st_as_sf(coords = c("lon", "lat"), crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")) 
+Spatial_Scen_0=ggplot(data = coast_outline)+
+  geom_sf(data = Proj_df %>% st_as_sf(coords = c("lon", "lat"), crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")),
+          colour = "grey98")+
+  geom_sf()+#geom_sf(data = OSW_current, fill = "transparent", colour = "#D55E00") +
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+ggsave(paste0(WD.1, "/Plots/WCGBTS.png"),
+       Spatial_Scen_0,
+               height = 3.62, width = 2.57, units = "in", dpi = 300, bg = "white")
+
+Spatial_Scen_1=ggplot(data = coast_outline)+
+  geom_point(data = Proj_df,
+       aes(x = lon, y = lat),size = .1, colour = "grey94", alpha = 0.1)+
+  geom_sf()+
+  geom_sf(data = OSW_current %>% filter(group %in% c("Humboldt", "Morro")), aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  geom_sf(data = OSW_current %>% filter(!group %in% c("Humboldt", "Morro")), aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  ggrepel::geom_label_repel(data = OSW_current %>% select(WEA_t, group, group_3) %>%
+                            group_by(group) %>% filter(row_number()==1), aes(label = group_3, geometry = geometry, colour = WEA_t), size = 3, 
+                            stat = "sf_coordinates", nudge_x = 300, segment.size = .2)+
+  scale_colour_manual(values = Colour_opt) + 
+  scale_fill_manual(values = Colour_opt)+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none")
+  
+Spatial_Scen_2=ggplot(data = coast_outline)+
+  geom_point(data = Proj_df,
+       aes(x = lon, y = lat),size = .1, colour = "grey94", alpha = 0.1)+
+  geom_sf()+
+  geom_sf(data = OSW_current, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  # ggrepel::geom_label_repel(data = OSW_current %>% filter(!group %in% c("Humboldt", "Morro")) %>%
+  #                           group_by(group) %>% filter(row_number()==1), aes(label = group, geometry = geometry), 
+  #                           stat = "sf_coordinates", nudge_x = 300)+
+  geom_sf(data = OSW_Large, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  ggrepel::geom_label_repel(data = OSW_Large %>% select(WEA_t, group, group_3)%>% filter(group %in% "Monterey") %>% group_by(group) %>% filter(row_number()==1), 
+                            aes(label = group_3, geometry = geometry, colour = WEA_t), size = 3,
+                            stat = "sf_coordinates", nudge_x = 200, segment.size = .2)+
+  ggrepel::geom_label_repel(data = OSW_Large%>% select(WEA_t, group, group_3)%>% filter(group %in% "Del Norte") %>% group_by(group) %>% filter(row_number()==1), 
+                            aes(label = group_3, geometry = geometry, colour = WEA_t), size = 3,
+                            stat = "sf_coordinates", nudge_x = 350, nudge_y = 200, segment.size = .2)+
+  ggrepel::geom_label_repel(data = OSW_Large %>% select(WEA_t, group, group_3)%>% filter(!group %in% c("Del Norte", "Monterey")) %>%
+                                                          group_by(group) %>% filter(row_number()==1), 
+                            aes(label = group_3, geometry = geometry, colour = WEA_t), size = 3,
+                            stat = "sf_coordinates", nudge_x = 600, segment.size = .2)+
+
+    scale_colour_manual(values = Colour_opt) + 
+  scale_fill_manual(values = Colour_opt)+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none")
+
+Spatial_Scen_3=ggplot(data = coast_outline)+
+  geom_point(data = Proj_df,
+       aes(x = lon, y = lat),size = .1, colour = "grey94", alpha = 0.1)+
+  geom_sf()+
+  geom_sf(data = OSW_current %>% filter(group %in% c("Humboldt", "Morro")), aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  geom_sf(data = OSW_Scen3, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+    ggrepel::geom_label_repel(data = OSW_Scen3%>% select(WEA_t, group, group_3)%>%group_by(group) %>% filter(row_number()==1), 
+                              aes(label = group_3, geometry = geometry, colour = WEA_t), size = 3,
+                              stat = "sf_coordinates", nudge_x = 300, segment.size = .2)+
+  scale_colour_manual(values = Colour_opt) + 
+  scale_fill_manual(values = Colour_opt)+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "none")
+
+Colour_opt = c("Leased WEAs" ="#CC79A7" ,
+               "Designated WEAs" = "#D55E00",
+               "CA Sea Space AOIs" = "#009E73",
+               "CA Suitable Sea Space" = "#0072B2",
+               "OR Call Areas" = "#E69F00")
+## Make legend plot 
+legend_plot_fig1 = ggplot(data = coast_outline)+
+  geom_point(data = Proj_df,
+       aes(x = lon, y = lat),size = .1, colour = "grey90", alpha = 0.1)+
+    geom_sf(data = OSW_current, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  geom_sf(data = OSW_Scen3, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+    ggrepel::geom_label_repel(data = OSW_Scen3%>%group_by(group) %>% filter(row_number()==1), 
+                              aes(label = group_3, geometry = geometry),
+                              stat = "sf_coordinates", nudge_x = 300)+
+  geom_sf(data = OSW_Large, aes(fill = WEA_t, colour = WEA_t), alpha = 0.4) +
+  scale_colour_manual(values = Colour_opt, breaks = c("Designated WEAs", "CA Suitable Sea Space",
+                                                    "OR Call Areas", "Leased WEAs", "OTHER",
+                                                    "CA Sea Space AOIs")) + 
+  scale_fill_manual(values = Colour_opt, breaks = c("Designated WEAs", "CA Suitable Sea Space",
+                                                    "OR Call Areas", "Leased WEAs", "OTHER",
+                                                    "CA Sea Space AOIs"))+
+  guides(fill = guide_legend(nrow = 2, byrow = T),
+         colour = guide_legend(nrow = 2, byrow = T))+
+  geom_sf()+
+  xlim(c(min(Proj_df$lon),
+         max(Proj_df$lon)))+
+  ylim(c(min(Proj_df$lat),
+         max(Proj_df$lat)))+
+    theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+plot(get_plot_component(legend_plot_fig1,"guide-box-bottom",return_all = T))
+
+ggarrange(ggarrange(Spatial_Scen_1, Spatial_Scen_2, Spatial_Scen_3, ncol = 3, 
+          labels = c("A)", "B)", "C)"), hjust = 0), 
+          get_plot_component(legend_plot_fig1,"guide-box-bottom",return_all = T),
+          ncol = 1, heights = c(1, 0.15))
+
+ggsave(paste0(WD.1, "/Plots/WCGBTS_diagram1.png"),
+       ggarrange(ggarrange(Spatial_Scen_1, Spatial_Scen_2, Spatial_Scen_3, ncol = 3, 
+          labels = c("1)", "2)", "3)"), hjust = 0), 
+          get_plot_component(legend_plot_fig1,"guide-box-bottom",return_all = T), NULL,
+          ncol = 1, heights = c(1, 0.15, .01)),
+               height = 4.05, width = 5.95, units = "in", dpi = 300, bg = "white")
+
+
+```
+### Overlap with the projection data set
+
+More information that would be useful if the different levels of overlap between these different proposed areas and the total area considered. This is the data included for table 1 in the manuscript. 
+
+```{r datainformationneeded}
+#Fishery data 
+Catch1 = readRDS(paste0(WD.1, "/Catch_Spec_2024-11-04.rds"))
+Bio1 = readRDS(paste0(WD.1, "/bio_Spec_2024-11-04.rds"))
+Haul1 = readRDS(paste0(WD.1, "/haul_Spec_2024-11-04.rds"))
+
+#Depth data 
+Bathy=st_as_sf(as(raster(paste0(WD.1, "/Shapefile/Bathymetry_EPOTC.tif")), "SpatialGridDataFrame"))
+Bathy = Bathy %>%
+  st_transform(crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))
+
+Projection_extent = readRDS(paste0(WD.1, "/Projection_shapefile_WCGBTWS.rds"))
+
+```
+
+```{r depth_area}
+# Current WEAs
+Bathy2 = st_intersection(OSW_current, Bathy)
+Bathy2b = st_intersection(Bathy2, Projection_extent)
+Bathy2b$X = st_coordinates(Bathy2b)[,1]
+Bathy2b$Y = st_coordinates(Bathy2b)[,2]
+Bathy2 %>%
+  group_by(group) %>%
+  summarise(Min = as.character(min(Bathymetry_EPOTC)*-1),
+            Mean = as.character(mean(Bathymetry_EPOTC)*-1),
+            Max = as.character(max(Bathymetry_EPOTC)*-1))
+ggplot(data = Bathy2b) + 
+  geom_sf(aes(colour = Bathymetry_EPOTC))
+# Proposed WEAs
+Bathy3 = st_intersection(OSW_Fut, Bathy)
+Bathy3b = st_intersection(Bathy3, Projection_extent)
+Bathy3b$X = st_coordinates(Bathy3b)[,1]
+Bathy3b$Y = st_coordinates(Bathy3b)[,2]
+
+Bathy3 %>%
+  group_by(group) %>%
+  summarise(Min = as.character(min(Bathymetry_EPOTC)*-1),
+            Mean = as.character(mean(Bathymetry_EPOTC)*-1),
+            Max = as.character(max(Bathymetry_EPOTC)*-1))
+
+
+# Proposed WEAs
+Bathy4 = st_intersection(OSW_Scen3, Bathy)
+Bathy4b = st_intersection(Bathy4, Projection_extent)
+Bathy4b$X = st_coordinates(Bathy4b)[,1]
+Bathy4b$Y = st_coordinates(Bathy4b)[,2]
+
+Bathy4 %>%
+  group_by(group) %>%
+  summarise(Min = as.character(min(Bathymetry_EPOTC)*-1),
+            Mean = as.character(mean(Bathymetry_EPOTC)*-1),
+            Max = as.character(max(Bathymetry_EPOTC)*-1))
+```
+
+Now we need to calcualte the areas
+
+```{r Tile_calcs}
+
+group_dif_ER = list()
+gr_group_xy <- list()
+gr_group = list()
+gr_pred_group = list()
+group_dif = list()
+group_list = list()
+
+OSW_all = dplyr::bind_rows(list(OSW_current, OSW_Fut, OSW_Scen3))
+OSW_all = OSW_all %>%
+  filter(group !="Mendocino1")
+
+#Grab points for plotting - entire region 
+gr=st_bbox(Proj_df %>%
+             st_as_sf(coords = c("lon", "lat"),
+                      crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km"))) %>%
+  st_make_grid(cellsize=.5, what='centers')%>%
+  st_as_sf() %>%
+  st_intersection(Projection_extent)%>%
+  st_intersection(st_as_sfc(OSW_all)) 
+gr_xy <- st_coordinates(gr)
+
+for(i in 1:length(unique(OSW_all$group))){ 
+  #Create a data frame for each OSW area
+  gr_group[[i]]= gr %>%
+    st_intersection(st_as_sfc(OSW_all[OSW_all$group==unique(OSW_all$group)[i],]))
+  gr_group_xy[[i]] = st_coordinates(gr_group[[i]])
+}
+names(gr_group) = unique(OSW_all$group)
+names(gr_group_xy) = unique(OSW_all$group)
+
+scen_list = list()
+  for(i in 1:length(gr_group_xy)){
+    if(i<5){
+      pred_points <- Bathy2b[Bathy2b$group %in% names(gr_group_xy)[i],] %>%
+      dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points[,1:2],gr_group_xy[[i]],k=1)$nn.idx
+      gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Est=Bathy2b[Bathy2b$group %in% names(gr_group_xy)[i],]$Bathymetry_EPOTC[nns])
+      gr_pred$OSW = names(gr_group_xy)[i]
+      scen_list[[i]] = gr_pred
+    }else if(i>=5 & i<10){
+      pred_points <- Bathy3b[Bathy3b$group %in% names(gr_group_xy)[i],] %>%
+        dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points[,1:2],gr_group_xy[[i]],k=1)$nn.idx
+      gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Est=Bathy3b[Bathy3b$group %in% names(gr_group_xy)[i],]$Bathymetry_EPOTC[nns])
+      gr_pred$OSW = names(gr_group_xy)[i]
+      scen_list[[i]] = gr_pred
+    }else{
+      pred_points <- Bathy4b[Bathy4b$group %in% names(gr_group_xy)[i],] %>%
+        dplyr::select(X,Y) %>% as.matrix()
+      nns <- nn2(pred_points[,1:2],gr_group_xy[[i]],k=1)$nn.idx
+      gr_pred <- gr_group_xy[[i]] %>% as_tibble() %>% mutate(Est=Bathy4b[Bathy4b$group %in% names(gr_group_xy)[i],]$Bathymetry_EPOTC[nns])
+      gr_pred$OSW = names(gr_group_xy)[i]
+      scen_list[[i]] = gr_pred
+    }
+  }
+gr_pred = bind_rows(scen_list)
+```
+
+```{r plotwithdepth}
+OSW_all2 = dplyr::bind_rows(list(OSW_current, OSW_Large, OSW_Scen3))
+OSW_all2 = OSW_all2 %>%
+  filter(group !="Mendocino1")
+
+oV_PLOTS = list()
+for(i in 1:length(unique(OSW_all2$group))){
+  oV_PLOTS[[i]]=ggplot(data = gr_pred[gr_pred$OSW %in% unique(OSW_all2$group)[i],])+
+    geom_tile(aes(x = X, y = Y, fill = Est*-1))+
+    xlim(min(st_coordinates(OSW_all2[OSW_all2$group==unique(OSW_all2$group)[i],])[,1]),
+         max(st_coordinates(OSW_all2[OSW_all2$group==unique(OSW_all2$group)[i],])[,1]))+
+    ylim(min(st_coordinates(OSW_all2[OSW_all2$group==unique(OSW_all2$group)[i],])[,2]),
+         max(st_coordinates(OSW_all2[OSW_all2$group==unique(OSW_all2$group)[i],])[,2]))+
+    geom_sf(data = OSW_all2[OSW_all2$group==unique(OSW_all2$group)[i],], fill = "transparent", lwd = 1, colour = "grey50")+
+    #geom_sf(data = Projection_extent, fill = "transparent")+
+    scale_fill_gradient2(name = "Depth (m)",
+                         low = "#ffffd9", mid = "#41b6c4", high = "#081d58", midpoint = 900,
+                         limits = c(max(gr_pred$Est)*-1,min(gr_pred$Est)*-1))+
+    labs(title = paste0(unique(OSW_all2$group)[i]))+
+    theme_classic()+
+    theme(#legend.title = element_blank(),
+          axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank())
+}
+
+trial=grid.arrange(grid.arrange(oV_PLOTS[[2]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[1]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[3]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[4]] + 
+               theme(legend.position = "none"), ncol = 1),
+             grid.arrange(oV_PLOTS[[7]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[8]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[6]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[9]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[5]] + 
+               theme(legend.position = "none"), ncol = 1),
+             grid.arrange(oV_PLOTS[[10]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[11]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[12]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[13]] + 
+               theme(legend.position = "none"),
+             oV_PLOTS[[14]] + 
+               theme(legend.position = "none"), ncol = 1), nrow =1)
+leg = (get_plot_component(oV_PLOTS[[5]], "guide-box-right",return_all = T))
+ggarrange(trial, leg,ncol = 2, widths = c(1, 0.1) )
+
+```
+
+```{r depthranges}
+
+Bathy2 %>% 
+  group_by(group)%>%
+  summarise(Min = min(Bathymetry_EPOTC),
+                     Mean = mean(Bathymetry_EPOTC),
+                     Max = max(Bathymetry_EPOTC))
+
+Bathy3 %>% 
+  group_by(group)%>%
+  summarise(Min = min(Bathymetry_EPOTC),
+                     Mean = mean(Bathymetry_EPOTC),
+                     Max = max(Bathymetry_EPOTC))
+
+Bathy4 %>% 
+  group_by(group)%>%
+  summarise(Min = min(Bathymetry_EPOTC),
+                     Mean = mean(Bathymetry_EPOTC),
+                     Max = max(Bathymetry_EPOTC))
+
+```
+
+```{r Total area }
+
+for(j in 1:length(unique(OSW_all$group))){
+  print(unique(OSW_all$group)[j])
+  print(OSW_all %>%
+  filter(group %in% unique(OSW_all$group)[j]) %>%
+  st_area() %>%
+  sum)
+}
+
+Overlap_Opt=st_intersection(OSW_all, Projection_extent)
+
+for(j in 1:length(unique(Overlap_Opt$group))){
+  print(unique(Overlap_Opt$group)[j])
+  print(Overlap_Opt %>%
+  filter(group %in% unique(Overlap_Opt$group)[j]) %>%
+  st_area() %>%
+  sum)
+}
+
+
+for(j in 1:length(unique(Overlap_Opt$group))){
+  print(unique(Overlap_Opt$group)[j])
+  print( ((Overlap_Opt %>%
+  filter(group %in% unique(Overlap_Opt$group)[j]) %>%
+  st_area() %>%
+  sum)/ OSW_all %>%
+  filter(group %in% unique(Overlap_Opt$group)[j]) %>%
+  st_area() %>%
+  sum)*100)
+}
+
+```
+
+```{r samples per year}
+Overlap_Samples=st_intersection(OSW_all, Haul1)
+
+overlap1 = list()
+
+for(i in 1:length(unique(OSW_all$group))){
+  overlap1[[i]] = st_intersection(Haul1 %>% 
+                                    st_as_sf(coords = c("longitude_dd", "latitude_dd"),
+                                             crs = st_crs("+proj=longlat +datum=WGS84")) %>%
+                                    st_transform(crs = st_crs("+proj=utm +zone=10 +datum=WGS84 +units=km")),
+                                  OSW_all[OSW_all$group %in% unique(OSW_all$group)[i],])
+}
+
+names(overlap1) = unique(OSW_all$group)
+lapply(overlap1, function(x) nrow(x)/20)
+```
