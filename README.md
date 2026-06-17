@@ -5,6 +5,9 @@ This repository contains code, data, and other documentation for a study on the 
 O’Brien, K.A., Andrews, K.S., Langseth, B.J., and Berger, A.M. 2026. Quantifying potential impacts of ocean-use sectors on biomass and density estimates for fisheries stock assessments. Fisheries Research. DOI: https://doi.org/10.1016/j.fishres.2026.107749
 
 ## Repo structure
+
+Note: some of the files in this repo were too large (>200 MB) to push to GitHub, so they will be stored elsewhere at NOAA (e.g., Google Data Bucket) and linked to this repo soon. 
+
 /data =  data for sdmTMB models. Within the /data folder, the .rds files are the data used for each model. 
 
 /model = rds files for fitted sdmTMB models. Within the /model folder, the folders /Depth and No_Depth indicate whether depth was used as a covariate or not. The subfolders within Depth or No_Depth indicate which spatial and temporal scenarios (18 in total) were modeled, as further described in O'Brien et al., 2026.
