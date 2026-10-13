@@ -53,6 +53,7 @@ rsconnect/
 
 # two folders with larger files that will be stored in data bucket instead of GitHub
 # edit this as needed when running code on a new machine
-/Users/helena.mcmonagle/Desktop/Project-1-WEA-Resampling/Data_files-sdmTMB
-/Users/helena.mcmonagle/Desktop/Project-1-WEA-Resampling/Model_RSD-sdmTMB
+Data_files-sdmTMB/
+Model_RSD-sdmTMB/
 
+# add file path, similar to above, but that will work on any machine that the repo is cloned to
