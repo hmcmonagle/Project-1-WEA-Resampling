@@ -54,6 +54,5 @@ rsconnect/
 # two folders with larger files that will be stored in data bucket instead of GitHub
 # edit this as needed when running code on a new machine
 Data_files-sdmTMB/
-Model_RSD-sdmTMB/
-
-# add file path, similar to above, but that will work on any machine that the repo is cloned to
+Model_RDS-sdmTMB/
+Data_WCGBTS/

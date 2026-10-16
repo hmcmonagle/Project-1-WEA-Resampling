@@ -33,6 +33,7 @@ library("ggbreak")
 library("nwfscSurvey")
 library("eply")
 library("patchwork")
+#remotes::install_github("pbs-assess/sdmTMBextra", dependencies = TRUE) # always load sdmTMBextra after sdmTMB
 library("sdmTMBextra")
 library("units")
 library("RANN")
@@ -48,6 +49,11 @@ gc()
 ## Working directory 
 WD.1=("C:/Users/kaitlyn.o'brien/Documents/GitHub/Offshore_Wind_PJ1/Data")
 
+# HM = more recent edit from Helena McMonagle
+# HM: Edit for local machine where WCGBTS data is stored
+library(here)
+WD.1=here("Data_WCGBTS") # check which data files should be in this folder 
+  
 ###############################
 #### Shapefile information ####
 ###############################
