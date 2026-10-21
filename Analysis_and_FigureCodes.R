@@ -52,7 +52,7 @@ WD.1=("C:/Users/kaitlyn.o'brien/Documents/GitHub/Offshore_Wind_PJ1/Data")
 # HM = more recent edit from Helena McMonagle
 # HM: Edit for local machine where WCGBTS data is stored
 library(here)
-WD.1=here("Data_WCGBTS") # check which data files should be in this folder 
+WD.1=here() # check later if missing any files that should be in this folder 
   
 ###############################
 #### Shapefile information ####
@@ -137,9 +137,15 @@ Dens_Prc_Change_func.b = readRDS(paste0(WD.1, "/Functions/Dens_perc_change_func_
 ### Aurora ####
 Aurora_all = list()
 ## Load in the function information on the biomass and density estimates####
-Aurora_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 1_2025-05-29_NEW4.rds")),
-                       readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 2_2025-05-29_NEW4.rds")),
-                       readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 3_2025-05-29_NEW4.rds")))
+#Aurora_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 1_2025-05-29_NEW4.rds")),
+#                       readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 2_2025-05-29_NEW4.rds")),
+#                       readRDS(paste0(WD.1, "/sdmTMB_func/Aurora rockfish_Scenario 3_2025-05-29_NEW4.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Aurora_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Aurora rockfish_Scenario 1_2025-05-29_NEW4.rds")),
+                  readRDS(paste0(WD.1, "/Data_files-sdmTMB/Aurora rockfish_Scenario 2_2025-05-29_NEW4.rds")),
+                  readRDS(paste0(WD.1, "/Data_files-sdmTMB/Aurora rockfish_Scenario 3_2025-05-29_NEW4.rds")))
+
 #Now divide this information between the model that included depth and did not 
 Aurora_nd = list()
 Aurora_d = list()
@@ -149,12 +155,20 @@ for(i in 1:3){
   names(Aurora_d[[i]]) = names(Aurora_nd[[i]])
 }
 
+
 ### Longspine ####
 Longspine_all = list()
 ## Load in the function information on the biomass and density estimates####
-Longspine_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 1_2025-05-28_NEW3.rds")),
-                  readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 2_2025-05-28_NEW3.rds")),
-                  readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 3_2025-05-28_NEW3.rds")))
+#Longspine_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 1_2025-05-28_NEW3.rds")),
+#                  readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 2_2025-05-28_NEW3.rds")),
+#                  readRDS(paste0(WD.1, "/sdmTMB_func/Longspine thornyhead_Scenario 3_2025-05-28_NEW3.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Longspine_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Longspine thornyhead_Scenario 1_2025-05-28_NEW3.rds")),
+                  readRDS(paste0(WD.1, "/Data_files-sdmTMB/Longspine thornyhead_Scenario 2_2025-05-28_NEW3.rds")),
+                  readRDS(paste0(WD.1, "/Data_files-sdmTMB/Longspine thornyhead_Scenario 3_2025-05-28_NEW3.rds")))
+
+
 #Now divide this information between the model that included depth and did not 
 Longspine_nd = list()
 Longspine_d = list()
@@ -168,9 +182,14 @@ for(i in 1:3){
 ### Sablefish ####
 Sablefish_all = list()
 
-Sablefish_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 1_2025-05-21_NEW3.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 2_2025-05-21_NEW3.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 3_2025-05-21_NEW3.rds")))
+#Sablefish_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 1_2025-05-21_NEW3.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 2_2025-05-21_NEW3.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Sablefish_Scenario 3_2025-05-21_NEW3.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Sablefish_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Sablefish_Scenario 1_2025-05-21_NEW3.rds")),
+                     readRDS(paste0(WD.1, "/Data_files-sdmTMB/Sablefish_Scenario 2_2025-05-21_NEW3.rds")),
+                     readRDS(paste0(WD.1, "/Data_files-sdmTMB/Sablefish_Scenario 3_2025-05-21_NEW3.rds")))
 
 Sablefish_nd = list()
 Sablefish_d = list()
@@ -183,9 +202,15 @@ for(i in 1:3){
 ### Shortspine ####
 Shortspine_all = list()
 
-Shortspine_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 1_2025-05-29_NEW4.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 2_2025-05-29_NEW4.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 3_2025-05-30_NEW4.rds")))
+#Shortspine_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 1_2025-05-29_NEW4.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 2_2025-05-29_NEW4.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Shortspine thornyhead_Scenario 3_2025-05-30_NEW4.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Shortspine_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Shortspine thornyhead_Scenario 1_2025-05-29_NEW4.rds")),
+                      readRDS(paste0(WD.1, "/Data_files-sdmTMB/Shortspine thornyhead_Scenario 2_2025-05-29_NEW4.rds")),
+                      readRDS(paste0(WD.1, "/Data_files-sdmTMB/Shortspine thornyhead_Scenario 3_2025-05-30_NEW4.rds")))
+
 
 Shortspine_nd = list()
 Shortspine_d = list()
@@ -198,9 +223,14 @@ for(i in 1:3){
 ### Rex ####
 Rex_all = list()
 
-Rex_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 1_2025-05-21_NEW2.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 2_2025-05-22_NEW2.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 3_2025-05-22_NEW2.rds")))
+#Rex_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 1_2025-05-21_NEW2.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 2_2025-05-22_NEW2.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Rex sole_Scenario 3_2025-05-22_NEW2.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Rex_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Rex sole_Scenario 1_2025-05-21_NEW2.rds")),
+                 readRDS(paste0(WD.1, "/Data_files-sdmTMB/Rex sole_Scenario 2_2025-05-22_NEW2.rds")),
+                 readRDS(paste0(WD.1, "/Data_files-sdmTMB/Rex sole_Scenario 3_2025-05-22_NEW2.rds")))
 
 Rex_nd = list()
 Rex_d = list()
@@ -213,9 +243,14 @@ for(i in 1:3){
 ### Dover ####
 Dover_all = list()
 
-Dover_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 1_2025-05-22_NEW3.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 2_2025-05-23_NEW3.rds")),
-                     readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 3_2025-05-23_NEW3.rds")))
+#Dover_all = list(readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 1_2025-05-22_NEW3.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 2_2025-05-23_NEW3.rds")),
+#                     readRDS(paste0(WD.1, "/sdmTMB_func/Dover sole_Scenario 3_2025-05-23_NEW3.rds")))
+
+# HM: edited to match folder name where these RDS files are stored (Data_files-sdmTMB, instead of sdmTMB_func)
+Dover_all = list(readRDS(paste0(WD.1, "/Data_files-sdmTMB/Dover sole_Scenario 1_2025-05-22_NEW3.rds")),
+                 readRDS(paste0(WD.1, "/Data_files-sdmTMB/Dover sole_Scenario 2_2025-05-23_NEW3.rds")),
+                 readRDS(paste0(WD.1, "/Data_files-sdmTMB/Dover sole_Scenario 3_2025-05-23_NEW3.rds")))
 
 Dover_nd = list()
 Dover_d = list()
@@ -225,6 +260,23 @@ for(i in 1:3){
   names(Dover_d[[i]]) = names(Dover_nd[[i]])
 }
 
+# Generate files to use in Project 2
+
+# Use Dover_d to generate a separate df for each scenario for project 2 that only includes rows where group = Entire region
+Dover_d_scen1 <- filter(Dover_d[[1]]$Index, group == "Entire region")  # Scenario 1
+Dover_d_scen2 <- filter(Dover_d[[2]]$Index, group == "Entire Region")  # Scenario 2
+
+# save these 3 Dover dataframes as CSV files for use in Project 2
+Dover_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scen1_index.csv"), row.names = FALSE)
+Dover_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scen2_index.csv"), row.names = FALSE)
+
+# repeat for sablefish
+Sablefish_d_scen1 <- filter(Sablefish_d[[1]]$Index, group == "Entire region")  # Scenario 1
+Sablefish_d_scen2 <- filter(Sablefish_d[[2]]$Index, group == "Entire Region")  # Scenario 2
+
+# save
+Sablefish_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scen1_index.csv"), row.names = FALSE)
+Sablefish_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scen2_index.csv"), row.names = FALSE)
 
 ############################################
 #### Density Maps ####

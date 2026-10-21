@@ -1,5 +1,7 @@
 # Overview
-This repository contains code, data, and other documentation for a study on the effects of spatial closures for offshore energy infrastructure on fisheries abundance estimation. Code accompanies O'Brien et al 2026 paper titled "Quantifying potential impacts of ocean-use sectors on biomass and density estimates for fisheries stock assessments" by Kaitlyn O’Brien, Kelly Andrews, Brian Langseth, and Aaron Berger at the NOAA Northwest Fisheries Science Center. These files were downloaded from the team's Google Drive folder "Project-1 WEA Resampling" and added to this repository in June 2026.
+This repository contains code, data, and other documentation for a study on the effects of spatial closures for offshore energy infrastructure on fisheries abundance estimation. 
+Code accompanies O'Brien et al 2026 paper titled "Quantifying potential impacts of ocean-usesectors on biomass and density estimates for fisheries stock assessments" by Kaitlyn O’Brien, Kelly Andrews, Brian Langseth, and Aaron Berger at the NOAA Northwest Fisheries Science Center. 
+These files were downloaded from the team's Google Drive folder "Project-1 WEA Resampling" and added to this repository in June 2026.
 
 ## Citation
 O’Brien, K.A., Andrews, K.S., Langseth, B.J., and Berger, A.M. 2026. Quantifying potential impacts of ocean-use sectors on biomass and density estimates for fisheries stock assessments. Fisheries Research. DOI: https://doi.org/10.1016/j.fishres.2026.107749
