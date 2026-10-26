@@ -267,16 +267,16 @@ Dover_d_scen1 <- filter(Dover_d[[1]]$Index, group == "Entire region")  # Scenari
 Dover_d_scen2 <- filter(Dover_d[[2]]$Index, group == "Entire Region")  # Scenario 2
 
 # save these 3 Dover dataframes as CSV files for use in Project 2
-Dover_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scen1_index.csv"), row.names = FALSE)
-Dover_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scen2_index.csv"), row.names = FALSE)
+Dover_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scenario1_index.csv"), row.names = FALSE)
+Dover_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Dover_depth_scenario2_index.csv"), row.names = FALSE)
 
 # repeat for sablefish
 Sablefish_d_scen1 <- filter(Sablefish_d[[1]]$Index, group == "Entire region")  # Scenario 1
 Sablefish_d_scen2 <- filter(Sablefish_d[[2]]$Index, group == "Entire Region")  # Scenario 2
 
 # save
-Sablefish_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scen1_index.csv"), row.names = FALSE)
-Sablefish_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scen2_index.csv"), row.names = FALSE)
+Sablefish_d_scen1 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scenario1_index.csv"), row.names = FALSE)
+Sablefish_d_scen2 %>% write.csv(paste0(WD.1, "/Outputs_for_Project_2/Sablefish_depth_scenario2_index.csv"), row.names = FALSE)
 
 ############################################
 #### Density Maps ####
